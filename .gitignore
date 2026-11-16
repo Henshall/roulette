@@ -8,11 +8,9 @@ debian/debhelper-build-stamp
 ../roulette_*.buildinfo
 ../roulette_*.changes
 
-# Snap build artifacts
-parts/
-prime/
-stage/
-*.snap
+# Local build output
+dist/
+*.deb
 
 # Python
 __pycache__/

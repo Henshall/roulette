@@ -1,3 +1,33 @@
+roulette (1.4.0) unstable; urgency=medium
+
+  * Added --beg: the only way to earn chips back. Beg while broke and the
+    house spots you 100 (through 20 escalating levels of sass); beg with
+    money and it mocks you. Tracks how many times you have gone broke.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Mon, 16 Nov 2026 00:00:00 +0000
+
+roulette (1.3.0) unstable; urgency=medium
+
+  * Super-random wildcard pockets: land on one and it runs a high-entropy
+    command, turns the output into red/black, lights up the wheel and
+    declares a winner (settles bets against the derived color).
+  * Spinning wheel now alternates red/black instead of clumping colors.
+  * Betting: show the win/lose verdict before running the command so its
+    flavor output can't be mistaken for the result.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Mon, 16 Nov 2026 00:00:00 +0000
+
+roulette (1.2.0) unstable; urgency=medium
+
+  * Cross-platform support (Linux + macOS) with per-OS command sets.
+  * Added cheeky, harmless "losing" commands to the wheel.
+  * Betting: colored red/black/green/jackpot pockets, a persistent bankroll,
+    win streaks and a --stats view.
+  * Removed snap packaging; install via .deb or from source.
+  * Fixed a cal command that failed on hosts without cal.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Mon, 16 Nov 2026 00:00:00 +0000
+
 roulette (1.0.0) unstable; urgency=medium
 
   * Initial release.

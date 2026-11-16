@@ -12,7 +12,13 @@ to a stop, lands on one command, and then executes it.
 Every command on the wheel is read-only and non-destructive \(em listing
 files, showing the date, reporting disk usage, memory, processes, and the
 like. A spin can never modify files, change system state, or send data over
-the network, so it is always safe to run.
+the network, so it is always safe to run. It works on Linux and macOS,
+picking platform-appropriate commands at runtime.
+.PP
+Each command is also a colored pocket (red, black, or a green "loser"), so you
+can bet on the spin with \fB\-\-bet\fR (see below). Five magenta "super spin"
+pockets are wild: landing on one runs a high-entropy command and turns its
+output into red or black, settling any bet against that color.
 .SH OPTIONS
 .TP
 .BR \-n ", " \-\-dry\-run
@@ -34,6 +40,26 @@ every file and folder in the current directory is moved to the trash. This is
 opt-in, recoverable (it uses the desktop trash, not \fBrm\fR), and asks for
 confirmation before deleting anything. Without this flag the wheel holds only
 read-only commands and can never delete.
+.TP
+.BI \-\-bet " CHIPS"
+Wager \fICHIPS\fR on the spin. The colored pocket you land on settles the bet
+against a persistent bankroll in \fB~/.roulette/state.json\fR (you start with
+100 chips). Opt-in: a plain spin never touches the bankroll.
+.TP
+.BI \-\-on " TARGET"
+What to bet on: \fBred\fR, \fBblack\fR, \fBgreen\fR (the losing commands, which
+pay big), or \fBjackpot\fR (a marquee pocket). Defaults to \fBred\fR.
+.TP
+.B \-\-beg
+Beg the house for chips \(em the only way to earn them back. While broke the
+house spots you 100 chips through 20 escalating levels of sass; beg with money
+in hand and it mocks you instead. Tracks how many times you have gone broke.
+.TP
+.B \-\-stats
+Show the bankroll, win rate and streak, then exit.
+.TP
+.B \-\-reset
+Reset the bankroll to 100 chips and clear stats.
 .TP
 .B \-\-no\-color
 Disable ANSI colors.

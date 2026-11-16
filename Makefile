@@ -3,7 +3,7 @@ DESTDIR ?=
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: install uninstall deb snap check clean
+.PHONY: install uninstall deb check clean
 
 install:
 	install -d $(BINDIR)
@@ -20,10 +20,6 @@ uninstall:
 deb:
 	dpkg-buildpackage -us -uc -b
 
-# Build a snap (requires snapcraft)
-snap:
-	snapcraft
-
 # Quick sanity checks that don't execute a random command
 check:
 	python3 -c "import ast; ast.parse(open('roulette').read()); print('syntax OK')"
@@ -32,4 +28,4 @@ check:
 
 clean:
 	rm -rf debian/roulette debian/.debhelper debian/files debian/*.substvars debian/debhelper-build-stamp
-	rm -rf parts prime stage *.snap
+	rm -rf dist *.deb ../roulette_*.deb
