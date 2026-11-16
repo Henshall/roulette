@@ -1,3 +1,28 @@
+roulette (2.0.0) unstable; urgency=medium
+
+  * `roulette` is now a real roulette table: a single-zero wheel, the full
+    betting layout (straights, splits, streets, corners, six lines, dozens,
+    columns, even money) and an interactive table with re-bets and history.
+  * Zero house edge: landing on 0 pays bets on 0 at 36:1 and sends every
+    other bet to a SUPER SPIN on 1-36, so every bet has an EV of exactly 0.
+  * The command wheel moved to --commands (and --russian). Red/black bets
+    that land on a green "loser" command get a second-chance super spin.
+  * --stats shows chips wagered, realized return and recent numbers.
+  * A random fancy croupier (Gaston, Céleste, Lorenzo, ...): comments on bets and results, accepts tips
+    (tip / --tip, no effect on the odds), and calls out the Martingale.
+  * The ball occasionally escapes the wheel; straight-up hits get fireworks.
+  * Break the Bank: runs start at 100 chips and are won at 1000. The croupier
+    lasts the whole run; each chip tipped is +5% luck (max 30%) that a losing
+    spin gets rigged your way, fading over 10 spins, until the pit boss
+    catches you. Odds: 10% -> ~40% with steady tipping. Luck shows as 🍀 +5%;
+    a 0 tip is -5%, and negative luck gets winning spins spoiled.
+  * `swap_table` / --swap-table moves you to a table with a new croupier
+    (luck resets; blocked for 5 spins after a bust). Seven more croupiers, 21 in all.
+  * Each pit-boss bust doubles the catch chance for the rest of the run, at
+    every table, so swapping tables can't dodge the consequences.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Mon, 16 Nov 2026 00:00:00 +0000
+
 roulette (1.4.0) unstable; urgency=medium
 
   * Added --beg: the only way to earn chips back. Beg while broke and the

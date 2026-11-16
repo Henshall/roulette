@@ -25,6 +25,8 @@ check:
 	python3 -c "import ast; ast.parse(open('roulette').read()); print('syntax OK')"
 	./roulette --list >/dev/null && echo "list OK"
 	./roulette --dry-run --pick >/dev/null && echo "dry-run OK"
+	./roulette --table >/dev/null && echo "table OK"
+	./roulette --commands --dry-run --pick >/dev/null && echo "commands dry-run OK"
 
 clean:
 	rm -rf debian/roulette debian/.debhelper debian/files debian/*.substvars debian/debhelper-build-stamp
