@@ -1,0 +1,67 @@
+.TH ROULETTE 1 "November 2026" "roulette 1.0.0" "User Commands"
+.SH NAME
+roulette \- spin a wheel of harmless, read-only commands and run the winner
+.SH SYNOPSIS
+.B roulette
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B roulette
+displays a reel of shell commands scrolling past a pointer. The reel slows
+to a stop, lands on one command, and then executes it.
+.PP
+Every command on the wheel is read-only and non-destructive \(em listing
+files, showing the date, reporting disk usage, memory, processes, and the
+like. A spin can never modify files, change system state, or send data over
+the network, so it is always safe to run.
+.SH OPTIONS
+.TP
+.BR \-n ", " \-\-dry\-run
+Spin and pick a command, but do not execute it.
+.TP
+.BR \-l ", " \-\-list
+List every command on the wheel and exit.
+.TP
+.BR \-p ", " \-\-pick ", " \-f ", " \-\-fast
+Skip the spin animation and run the winner immediately.
+.TP
+.B \-\-keep\-wheel
+Keep the full wheel on screen after it lands. By default the wheel collapses
+once the spin stops, leaving just the result and the command's output.
+.TP
+.B \-\-russian
+Add a \(lqrussian roulette\(rq slot to the wheel. If the spin lands on it,
+every file and folder in the current directory is moved to the trash. This is
+opt-in, recoverable (it uses the desktop trash, not \fBrm\fR), and asks for
+confirmation before deleting anything. Without this flag the wheel holds only
+read-only commands and can never delete.
+.TP
+.B \-\-no\-color
+Disable ANSI colors.
+.TP
+.BI \-\-timeout " SECS"
+Seconds to allow the winning command to run (default: 15).
+.TP
+.BI \-\-seed " N"
+Seed the random generator for a reproducible spin.
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.TP
+.BR \-h ", " \-\-help
+Show a help message and exit.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+If set, colors are disabled (same as \fB\-\-no\-color\fR).
+.SH EXIT STATUS
+Returns the exit status of the executed command, or 0 for
+.BR \-\-list " / " \-\-dry\-run .
+.SH EXAMPLES
+.TP
+.B roulette
+Spin the wheel and run the winning command.
+.TP
+.B roulette \-\-dry\-run
+See what it would land on without running anything.
+.SH AUTHOR
+roulette contributors.

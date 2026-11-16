@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+
+override_dh_auto_install:
+	install -d debian/roulette/usr/bin
+	install -m 0755 roulette debian/roulette/usr/bin/roulette

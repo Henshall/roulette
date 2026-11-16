@@ -1,0 +1,28 @@
+name: roulette
+base: core24
+version: '1.0.0'
+summary: Terminal roulette wheel of harmless read-only commands
+description: |
+  roulette spins a reel of shell commands past a pointer, slows to a stop,
+  and runs whichever command it lands on. Every command on the wheel is
+  read-only and non-destructive (listing files, showing the date, reporting
+  disk usage, and so on), so a spin can never harm your system.
+
+  Classic confinement is used so the winning command can inspect the real
+  system (disks, processes, network interfaces) rather than a sandboxed view.
+
+grade: stable
+confinement: classic
+
+apps:
+  roulette:
+    command: bin/roulette
+
+parts:
+  roulette:
+    plugin: nil
+    source: .
+    override-build: |
+      install -D -m 0755 roulette "$CRAFT_PART_INSTALL/bin/roulette"
+    build-packages:
+      - python3

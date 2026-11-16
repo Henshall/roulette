@@ -1,0 +1,20 @@
+Source: roulette
+Section: games
+Priority: optional
+Maintainer: Roulette Maintainer <sourcecodeholdings@protonmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: roulette
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.6), bash
+Recommends: util-linux, procps, coreutils
+Description: terminal roulette wheel of harmless read-only commands
+ roulette spins a reel of shell commands past a pointer, slows to a stop,
+ and runs whichever command it lands on. Every command on the wheel is
+ read-only and non-destructive (listing files, showing the date, reporting
+ disk usage, and so on), so a spin can never harm your system.
+ .
+ It is a small, dependency-free Python 3 program meant as a bit of fun for
+ the terminal.

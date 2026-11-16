@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+# roulette - spin a wheel of harmless, read-only commands and run the winner.
+#
+# Copyright (c) 2026 roulette contributors
+# Released under the MIT License. See the LICENSE file for details.
+
+"""roulette: a terminal roulette wheel of harmless, read-only commands.
+
+Type ``roulette`` and watch a reel of shell commands scroll past a pointer,
+slow down, and land on one -- which then gets executed. Every command in the
+wheel is read-only and non-destructive (listing files, showing the date,
+reporting disk usage, and so on), so a spin can never hurt your system.
+"""
+
+import argparse
+import os
+import random
+import shutil
+import subprocess
+import sys
+import time
+
+__version__ = "1.0.0"
+
+# ---------------------------------------------------------------------------
+# The wheel: a big set of harmless, read-only commands.
+#
+# Every entry is executed with ``bash -c`` so pipes, fallbacks (``|| ...``) and
+# output caps (``| head``) work. None of them modify files, send data over the
+# network, or change system state. Commands that may be missing on a minimal
+# system degrade gracefully with ``2>/dev/null`` and/or ``|| echo ...``.
+# ---------------------------------------------------------------------------
+COMMANDS = [
+    # --- Greetings & flavor (randomized) ---------------------------------
+    'm=("🎰 Lucky you!" "🍀 Winner winner!" "🎯 Bullseye!" "💰 Jackpot!" "🃏 Wild card!" "⭐ You shine!" "🔔 Ding ding ding!"); echo "${m[RANDOM % ${#m[@]}]}"',
+    'q=("Fortune favors the bold." "The wheel decides your fate." "Luck is on your side today." "Spin and prosper." "The house blinks first." "Round and round it goes."); echo "${q[RANDOM % ${#q[@]}]}"',
+    'fortune 2>/dev/null || echo "The wheel smiles upon you."',
+    'w=(LUCKY WINNER SPIN JACKPOT BINGO); t=${w[RANDOM % ${#w[@]}]}; figlet "$t" 2>/dev/null || echo "*** $t ***"',
+    's=("Moo-ney!" "Mooo, a win!" "Holy cow!" "Cash cow!"); c=${s[RANDOM % ${#s[@]}]}; cowsay "$c" 2>/dev/null || echo "( $c )"',
+    'w=(alpha bravo charlie delta echo foxtrot golf hotel); printf "%s\\n" "${w[@]:RANDOM%5:3}"',
+    # --- Games of chance (randomized) ------------------------------------
+    'echo "🎲 Rolled: $((RANDOM % 6 + 1)) and $((RANDOM % 6 + 1))"',
+    'echo "🎲 d20: $((RANDOM % 20 + 1))"',
+    'echo "🪙 Coin: $([ $((RANDOM % 2)) -eq 0 ] && echo Heads || echo Tails)"',
+    'echo "🔮 Lucky number: $((RANDOM % 100))"',
+    'echo "🎱 Magic 8-ball: $(shuf -e Yes No Maybe "Ask again later" Definitely Doubtful "Without a doubt" "Outlook not so good" 2>/dev/null | head -n 1)"',
+    'echo "🃏 Tarot: $(shuf -e "The Fool" "The Star" "The Sun" "Wheel of Fortune" "The Magician" "Strength" 2>/dev/null | head -n 1)"',
+    'shuf -i 1-49 -n 6 2>/dev/null | sort -n | tr "\\n" " "; echo "(your lottery numbers)"',
+    'shuf -e 🎲 🎰 🍀 🎯 🃏 💰 🏆 ⭐ 🔔 💎 2>/dev/null | head -n 1',
+    # --- Random numbers, strings & math ----------------------------------
+    'n=$((RANDOM * RANDOM + 2)); echo "Factoring $n:"; factor "$n"',
+    'a=$((RANDOM % 90 + 10)); b=$((RANDOM % 90 + 10)); echo "$a × $b = $((a * b))"',
+    'n=$((RANDOM % 900 + 100)); printf "%d = 0x%X = 0%o\\n" "$n" "$n" "$n"',
+    'seq $((RANDOM % 3 + 1)) $((RANDOM % 15 + 10)) | tr "\\n" " "; echo',
+    'seq 0 $((RANDOM % 5 + 2)) 40 | tr "\\n" " "; echo',
+    'tr -dc "A-Za-z0-9" < /dev/urandom 2>/dev/null | head -c 20; echo "  (random token)"',
+    'openssl rand -hex 12 2>/dev/null || head -c 12 /dev/urandom | od -An -tx1 | tr -d " "',
+    'od -An -tx1 -N 16 /dev/urandom 2>/dev/null | tr -s " " || echo "no /dev/urandom"',
+    'fold -w1 <<< "JACKPOT" | shuf 2>/dev/null | tr -d "\\n"; echo "  (scrambled)"',
+    'compgen -c 2>/dev/null | shuf | head -n 5 || ls /usr/bin | shuf | head -n 5',
+    'shuf -n 4 /usr/share/dict/words 2>/dev/null || echo "no dictionary installed"',
+    'yes "$(shuf -e 🎰 spin win luck 2>/dev/null | head -n 1)" | head -n $((RANDOM % 4 + 2))',
+    # --- Who / where am I ------------------------------------------------
+    "whoami",
+    "id",
+    "groups",
+    "hostname",
+    'hostname -I 2>/dev/null || echo "no addresses"',
+    "pwd",
+    'basename "$PWD"',
+    'dirname "$PWD"',
+    "realpath .",
+    "tty",
+    "who",
+    "w | head -n 10",
+    "last -n 10 2>/dev/null || echo 'no login history'",
+    # --- Date & time -----------------------------------------------------
+    "date",
+    "date -u",
+    'date "+%A %T.%3N"',
+    'date +"%A, %B %d %Y"',
+    "date +%s",
+    "date +%N",
+    "cat /proc/uptime",
+    "cal",
+    "cal -3 2>/dev/null || cal",
+    "ncal 2>/dev/null || cal",
+    "timedatectl 2>/dev/null | head -n 10 || date",
+    "uptime",
+    "uptime -p 2>/dev/null || uptime",
+    "uptime -s 2>/dev/null || uptime",
+    # --- System identity -------------------------------------------------
+    "uname -a",
+    "uname -r",
+    "uname -m",
+    "arch 2>/dev/null || uname -m",
+    "cat /etc/os-release",
+    "lsb_release -a 2>/dev/null || cat /etc/os-release",
+    "cat /proc/version",
+    "getconf LONG_BIT",
+    "nproc",
+    "cat /proc/loadavg",
+    # --- Hardware --------------------------------------------------------
+    "lscpu 2>/dev/null | head -n 25 || cat /proc/cpuinfo | head -n 20",
+    'grep "model name" /proc/cpuinfo | head -n 1',
+    "lsblk 2>/dev/null || df -h",
+    "lsusb 2>/dev/null | head -n 20 || echo 'lsusb not available'",
+    "lspci 2>/dev/null | head -n 20 || echo 'lspci not available'",
+    "lsmem 2>/dev/null | head -n 15 || free -h",
+    "sensors 2>/dev/null | grep -E '°C|RPM' | head -n 6 || echo 'lm-sensors not installed'",
+    "t=$(for z in /sys/class/thermal/thermal_zone*/temp; do v=$(cat \"$z\" 2>/dev/null); [ \"${v:-0}\" -gt 0 ] 2>/dev/null && { echo \"$v\"; break; }; done); [ -n \"$t\" ] && LC_ALL=C awk -v t=\"$t\" 'BEGIN{printf \"CPU temp: %.1f°C\\n\", t/1000}' || echo 'no usable thermal sensor'",
+    "acpi -b 2>/dev/null || cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo 'no battery info'",
+    # --- Memory & processes ---------------------------------------------
+    "free -h",
+    "free -m",
+    "free -m | awk '/^Mem/{printf \"RAM: %d/%d MB (%.0f%%)\\n\", $3, $2, $3/$2*100}'",
+    "cat /proc/meminfo | head -n 10",
+    "vmstat 2>/dev/null || free -h",
+    "vmstat 1 2 2>/dev/null | tail -n 1 || free -h",
+    "ps -ef | head -n 20",
+    "ps aux --sort=-%mem 2>/dev/null | head -n 10 || ps -ef | head -n 10",
+    "ps -eo pid,comm,%cpu --sort=-%cpu 2>/dev/null | head -n 10 || ps -ef | head -n 10",
+    "top -b -n1 2>/dev/null | head -n 15 || ps -ef | head -n 15",
+    "cat /proc/self/status 2>/dev/null | head -n 12",
+    # --- Disk & filesystem ----------------------------------------------
+    "df -h | head -n 20",
+    "df -hT 2>/dev/null | head -n 20 || df -h",
+    "df -i | head -n 15",
+    "du -sh . 2>/dev/null || echo '(could not measure)'",
+    "du -h -d1 . 2>/dev/null | sort -h | tail -n 15",
+    "mount 2>/dev/null | head -n 15 || cat /proc/mounts | head -n 15",
+    "stat .",
+    "ls /usr/bin | wc -l",
+    # --- Listing files ---------------------------------------------------
+    "ls --color=always",
+    "ls -lh --color=always 2>/dev/null | head -n 20",
+    "ls -la 2>/dev/null | head -n 20",
+    "ls -lt 2>/dev/null | head -n 15",
+    "ls /etc 2>/dev/null | head -n 20",
+    "find . -maxdepth 1 -type f 2>/dev/null | head -n 15",
+    "find . -maxdepth 2 -type d 2>/dev/null | shuf | head -n 10",
+    "tree -L 1 2>/dev/null || ls -1",
+    "file /bin/bash",
+    "file \"$(ls /usr/bin/* 2>/dev/null | shuf | head -n 1)\" 2>/dev/null || file /bin/sh",
+    "readlink -f /usr/bin",
+    # --- Environment -----------------------------------------------------
+    "env | sort | head -n 30",
+    "printenv PATH",
+    "printenv HOME",
+    "printenv SHELL",
+    'echo "Your shell is: ${SHELL:-unknown}"',
+    'echo "Language: ${LANG:-unset}"',
+    "locale 2>/dev/null | head -n 15 || echo 'locale not available'",
+    "which bash",
+    "type ls",
+    "command -v python3",
+    'echo "PATH entries: $(echo "$PATH" | tr ":" "\\n" | grep -c .)"',
+    # --- Networking (read-only, local) ----------------------------------
+    "ip -br addr 2>/dev/null || ip addr show 2>/dev/null | head -n 20 || ifconfig 2>/dev/null | head -n 20 || echo 'no ip tooling'",
+    "ip route 2>/dev/null | head -n 15 || echo 'no route tooling'",
+    "ss -tunl 2>/dev/null | head -n 15 || echo 'no socket tooling'",
+    "ss -s 2>/dev/null || echo 'no socket stats'",
+    "cat /etc/hostname",
+    "getent hosts localhost 2>/dev/null || head -n 3 /etc/hosts",
+    "head -n 5 /etc/hosts 2>/dev/null || echo 'no hosts file'",
+    "head -n 5 /etc/resolv.conf 2>/dev/null || echo 'no resolv.conf'",
+    # --- Text, files & fun ----------------------------------------------
+    "wc -l /etc/passwd",
+    "cut -d: -f1 /etc/passwd | head -n 15",
+    "awk -F: '{print $1}' /etc/passwd | shuf | head -n 10",
+    "sed -n '1,5p' /etc/os-release",
+    "rev <<< \"$(date)\"",
+    "head -n 5 /etc/services 2>/dev/null || echo 'no services file'",
+    "shuf -n 5 /etc/services 2>/dev/null | awk '{print $1, $2}' || echo 'no services file'",
+    # --- Misc read-only --------------------------------------------------
+    "help cd 2>/dev/null | head -n 5 || echo 'cd: change directory'",
+    "set | head -n 10",
+    "ulimit -a | head -n 12",
+    "umask",
+    "getent passwd | wc -l",
+    "ldd \"$(which bash)\" 2>/dev/null | head -n 10 || echo 'no ldd'",
+]
+
+# The optional 101st slot, added only with --russian. This is NOT a bash
+# command string; it is a sentinel handled specially by russian_roulette().
+RUSSIAN = "☠  RUSSIAN ROULETTE  ☠  (send everything here to the trash)"
+
+
+# ---------------------------------------------------------------------------
+# ANSI helpers
+# ---------------------------------------------------------------------------
+class Style:
+    def __init__(self, enabled):
+        self.enabled = enabled
+
+    def _wrap(self, code, text):
+        if not self.enabled:
+            return text
+        return f"\033[{code}m{text}\033[0m"
+
+    def dim(self, t):
+        return self._wrap("2;37", t)
+
+    def bright(self, t):
+        return self._wrap("1;33", t)
+
+    def win(self, t):
+        return self._wrap("1;30;43", t)  # black on yellow
+
+    def accent(self, t):
+        return self._wrap("1;36", t)
+
+    def green(self, t):
+        return self._wrap("1;32", t)
+
+    def red(self, t):
+        return self._wrap("1;31", t)
+
+
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
+CLEAR_LINE = "\033[K"
+
+
+def term_width(default=80):
+    try:
+        return shutil.get_terminal_size((default, 24)).columns
+    except Exception:
+        return default
+
+
+def label(cmd, width):
+    """One-line display label for a command (truncate if needed)."""
+    cmd = cmd.replace("\n", " ")
+    if len(cmd) > width:
+        cmd = cmd[: width - 1] + "…"
+    return cmd
+
+
+# ---------------------------------------------------------------------------
+# The spin animation
+# ---------------------------------------------------------------------------
+def spin(commands, style, *, frames=55, window=7, keep_wheel=False):
+    """Animate a scrolling reel and return the winning command."""
+    width = min(term_width(), 72)
+    inner = width - 10  # room for the pointer/markers
+    half = window // 2
+
+    # Build a reel long enough to scroll through `frames` positions.
+    reel = []
+    pool = commands[:]
+    needed = frames + window + 4
+    while len(reel) < needed:
+        random.shuffle(pool)
+        reel.extend(pool)
+
+    # Ease-out delays: start fast, end slow.
+    start_delay, end_delay = 0.010, 0.22
+    delays = []
+    for i in range(frames):
+        t = i / (frames - 1) if frames > 1 else 1.0
+        delays.append(start_delay + (end_delay - start_delay) * (t ** 2.3))
+
+    bar = "═" * (width - 2)
+    top = "╔" + bar + "╗"
+    bottom = "╚" + bar + "╝"
+    block_lines = window + 2  # borders
+
+    def render(center_idx):
+        lines = [style.accent(top)]
+        for off in range(-half, half + 1):
+            cmd = reel[center_idx + off]
+            text = label(cmd, inner)
+            if off == 0:
+                content = f" ▶  {text}"
+                content = content.ljust(width - 6)
+                row = "║ " + style.win(content) + " ◀ ║"
+            else:
+                faded = style.dim(text)
+                pad = width - 4 - len(label(cmd, inner))
+                row = "║  " + faded + (" " * max(pad, 0)) + " ║"
+            lines.append(row)
+        lines.append(style.accent(bottom))
+        return lines
+
+    out = sys.stdout
+    out.write(HIDE_CURSOR)
+    winner = reel[half]
+    try:
+        for f in range(frames):
+            center = half + f
+            winner = reel[center]
+            lines = render(center)
+            if f > 0:
+                out.write(f"\033[{block_lines}A")  # move cursor up to redraw
+            out.write("\r")
+            out.write(("\n").join(l + CLEAR_LINE for l in lines))
+            out.write("\n")
+            out.flush()
+            time.sleep(delays[f])
+        if not keep_wheel:
+            time.sleep(0.4)                       # let the landing register
+            out.write(f"\033[{block_lines}A")     # back to the top of the box
+            out.write("\033[J")                   # erase the box (and below)
+            out.flush()
+    finally:
+        out.write(SHOW_CURSOR)
+        out.flush()
+    return winner
+
+
+def _list_entries():
+    """Every file and folder in the current directory (names only, incl. dotfiles)."""
+    return sorted(os.listdir("."))
+
+
+def _trash_path(path):
+    """Move a file or folder to the trash (recoverable). Returns where it went."""
+    # Prefer the desktop trash via gio: restorable from the file manager.
+    if shutil.which("gio"):
+        r = subprocess.run(
+            ["gio", "trash", path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if r.returncode == 0:
+            return "Trash"
+    # Fallback: move into a timestamped recovery folder under $HOME.
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(os.path.expanduser("~"), ".local", "share",
+                        "roulette-trash", stamp)
+    os.makedirs(dest, exist_ok=True)
+    shutil.move(path, os.path.join(dest, os.path.basename(path.rstrip("/"))))
+    return dest
+
+
+def russian_roulette(style, dry_run):
+    """The russian slot: move every file and folder in the current dir to the trash."""
+    entries = _list_entries()
+    print()
+    print(style.red("  ☠  R U S S I A N   R O U L E T T E  ☠"))
+    print(style.dim("  Chamber: " + os.getcwd()))
+    print()
+
+    if not entries:
+        print(style.green("  This directory is empty — *click*. You live."))
+        return 0
+
+    print(style.dim("  In the chamber:"))
+    for e in entries:
+        tag = "/" if os.path.isdir(e) and not os.path.islink(e) else ""
+        print("    - " + e + tag)
+    print()
+
+    if dry_run:
+        print(style.dim("  (dry run — nothing deleted)"))
+        return 0
+
+    if not sys.stdin.isatty():
+        print(style.red("  Refusing to delete without an interactive confirmation."))
+        return 1
+
+    print(style.red(f"  All {len(entries)} item(s) here will be moved to the TRASH (recoverable)."))
+    try:
+        ans = input("  Type 'bang' to pull the trigger (anything else = chicken out): ")
+    except (EOFError, KeyboardInterrupt):
+        print(style.green("\n  You chickened out. Everything is safe."))
+        return 0
+    if ans.strip().lower() != "bang":
+        print(style.green("  You chickened out. Everything is safe."))
+        return 0
+
+    trashed, failed, where = [], [], "Trash"
+    for e in entries:
+        try:
+            where = _trash_path(e)
+            trashed.append(e)
+        except Exception as exc:  # noqa: BLE001
+            failed.append((e, exc))
+
+    print()
+    if trashed:
+        print(style.red(f"  💥 BANG. Trashed {len(trashed)} item(s): ")
+              + ", ".join(trashed))
+        print(style.dim(f"  Recover from: {where}"))
+    for e, exc in failed:
+        print(style.red(f"  Could not trash {e}: {exc}"))
+    return 0 if not failed else 1
+
+
+def run_command(cmd, style, timeout):
+    if cmd == RUSSIAN:
+        return russian_roulette(style, dry_run=False)
+    print()
+    print(style.green("  🎯 Landed on:"), style.bright(cmd))
+    print(style.dim("  " + "─" * 50))
+    print()
+    sys.stdout.flush()  # ensure our header prints before the subprocess output
+    try:
+        result = subprocess.run(
+            ["bash", "-c", cmd],
+            timeout=timeout,
+        )
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        print(style.red(f"\n  (command timed out after {timeout}s)"))
+        return 124
+    except FileNotFoundError:
+        print(style.red("  bash not found; cannot run the winning command."))
+        return 127
+    except KeyboardInterrupt:
+        print(style.red("\n  (interrupted)"))
+        return 130
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="roulette",
+        description="Spin a wheel of harmless, read-only commands and run the winner.",
+    )
+    p.add_argument(
+        "-n", "--dry-run", action="store_true",
+        help="spin and pick a command, but do not execute it",
+    )
+    p.add_argument(
+        "-l", "--list", action="store_true",
+        help="list every command on the wheel and exit",
+    )
+    p.add_argument(
+        "-p", "--pick", "-f", "--fast", action="store_true", dest="pick",
+        help="skip the spin animation and run the winner immediately",
+    )
+    p.add_argument(
+        "--keep-wheel", action="store_true",
+        help="keep the full wheel on screen after it lands "
+             "(default: collapse it once the spin stops)",
+    )
+    p.add_argument(
+        "--russian", action="store_true",
+        help="add a 'russian roulette' slot that trashes every file and folder "
+             "in the current directory (opt-in; asks before deleting)",
+    )
+    p.add_argument(
+        "--no-color", action="store_true",
+        help="disable ANSI colors",
+    )
+    p.add_argument(
+        "--timeout", type=int, default=15, metavar="SECS",
+        help="seconds to allow the winning command to run (default: 15)",
+    )
+    p.add_argument(
+        "--seed", type=int, default=None,
+        help="seed the random generator (for reproducible spins)",
+    )
+    p.add_argument(
+        "-V", "--version", action="version",
+        version=f"roulette {__version__}",
+    )
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    use_color = not args.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    style = Style(use_color)
+
+    wheel = list(COMMANDS)
+    if args.russian:
+        wheel.append(RUSSIAN)
+
+    if args.list:
+        for i, cmd in enumerate(wheel, 1):
+            print(f"{i:3d}. {cmd}")
+        return 0
+
+    is_tty = sys.stdout.isatty()
+
+    print()
+    print(style.accent("        🎰  R O U L E T T E  🎰"))
+    if args.russian:
+        print(style.red("     ☠ russian mode — 1 slot trashes everything here ☠"))
+    else:
+        print(style.dim("     every command is read-only — spin away!"))
+    print()
+
+    try:
+        if args.pick or not is_tty:
+            winner = random.choice(wheel)
+            if not is_tty:
+                # Non-interactive: don't animate, just report.
+                print(f"Picked: {winner}")
+        else:
+            winner = spin(wheel, style, keep_wheel=args.keep_wheel)
+    except KeyboardInterrupt:
+        sys.stdout.write(SHOW_CURSOR)
+        print(style.red("\n  (spin cancelled)"))
+        return 130
+
+    if args.dry_run:
+        print()
+        if winner == RUSSIAN:
+            return russian_roulette(style, dry_run=True)
+        print(style.green("  🎯 Would run:"), style.bright(winner))
+        print(style.dim("  (dry run — nothing executed)"))
+        return 0
+
+    return run_command(winner, style, args.timeout)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.stdout.write(SHOW_CURSOR)
+        sys.exit(130)

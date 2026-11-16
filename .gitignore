@@ -1,0 +1,19 @@
+# Debian build artifacts
+debian/roulette/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/debhelper-build-stamp
+../roulette_*.deb
+../roulette_*.buildinfo
+../roulette_*.changes
+
+# Snap build artifacts
+parts/
+prime/
+stage/
+*.snap
+
+# Python
+__pycache__/
+*.pyc
