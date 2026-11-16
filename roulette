@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-# roulette - spin a wheel of harmless, read-only commands and run the winner.
+# roulette - a zero-edge terminal roulette table (plus a wheel of harmless commands).
 #
 # Copyright (c) 2026 roulette contributors
 # Released under the MIT License. See the LICENSE file for details.
 
-"""roulette: a terminal roulette wheel of harmless, read-only commands.
+"""roulette: a zero-edge terminal roulette table.
 
-Type ``roulette`` and watch a reel of shell commands scroll past a pointer,
-slow down, and land on one -- which then gets executed. Every command in the
-wheel is read-only and non-destructive (listing files, showing the date,
-reporting disk usage, and so on), so a spin can never hurt your system.
+Type ``roulette`` to sit down at a real single-zero (European) wheel: place
+bets, watch the ball land, get paid. The house has NO edge -- landing on 0
+pays bets on 0 at 36:1 and triggers a SUPER SPIN for every other bet, which
+re-spins on 1-36 only, so every bet has an expected value of exactly zero.
+
+``roulette --commands`` (or ``--russian``) spins the original wheel of
+harmless, read-only shell commands and runs the winner.
 """
 
 import argparse
@@ -23,7 +26,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "1.4.0"
+__version__ = "2.0.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -261,6 +264,8 @@ RUSSIAN = "☠  RUSSIAN ROULETTE  ☠  (send everything here to the trash)"
 # A persistent bankroll + streak lives in ~/.roulette/state.json.
 # ---------------------------------------------------------------------------
 STARTING_CHIPS = 100
+GOAL = 1000              # reach this to break the bank and win the run
+HISTORY_LEN = 20
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".roulette", "state.json")
 MARQUEE_MARKERS = ("🏆", "JACKPOT", "lottery")
 BET_TARGETS = ("red", "black", "green", "jackpot")
@@ -270,6 +275,13 @@ _SUPER_SET = set(SUPER_LABELS)
 DEFAULT_STATE = {
     "chips": STARTING_CHIPS, "spins": 0, "wins": 0, "losses": 0,
     "streak": 0, "best_streak": 0, "biggest_win": 0, "broke_count": 0,
+    "pushes": 0, "wagered": 0, "net": 0, "history": [],
+    "tips": 0,
+    # Break the Bank runs + the croupier you're (maybe) cheating with.
+    "run": 1, "run_spins": 0, "run_begs": 0, "run_tipped": 0,
+    "tip_log": [], "tip_pending": 0,
+    "honest": 0, "croupier": "", "banks_broken": 0, "best_run": 0,
+    "rigs": 0, "caught": 0, "run_rigs": 0, "run_caught": 0, "heat": 0, "martingale": 0, "last_stake": 0, "last_net": 0,
 }
 
 # Begging is the ONLY way to earn chips back. Beg with money in hand and you get
@@ -286,6 +298,8 @@ BEG_INSULTS = [
     "The house laughs. You have chips. Use them.",
     "Begging is for the broke. You, my friend, are merely cheap.",
     "Come back when your pockets are actually empty.",
+    "The house ran your balance twice. Still {chips} 🪙. Still no.",
+    "Begging while solvent? The house is filing a formal complaint.",
 ]
 BEG_LEVELS = [
     "💸 Flat broke already? Fine — 100 🪙. Beginner's luck runs out fast.",
@@ -307,7 +321,11 @@ BEG_LEVELS = [
     "🧎 Beg #17. 100 🪙. The floor has memorized your knee prints.",
     "🤷 100 🪙. The house has given up trying to teach you anything.",
     "🙏 100 🪙. Even the slot machines feel bad for you now.",
-    "🏆 Twenty times broke — a record! 100 🪙, and your failure gets framed on the wall.",
+    "🎻 100 🪙. The house has hired a tiny violinist. Just for you.",
+    "📸 100 🪙. Your photo is now on the wall, next to the Martingale guy.",
+    "🧓 100 🪙. The house remembers when you were young and solvent.",
+    "🕯️ 100 🪙. The house lights a candle for your bankroll every night.",
+    "🏆 Twenty-four times broke — a record! 100 🪙, and your failure gets framed on the wall.",
 ]
 
 
@@ -380,13 +398,34 @@ def load_state():
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        state = dict(DEFAULT_STATE)
-        for k in DEFAULT_STATE:
-            if isinstance(data.get(k), int):
+        state = fresh_state()
+        for k, default in DEFAULT_STATE.items():
+            if isinstance(default, list):
+                if isinstance(data.get(k), list):
+                    if k == "history":
+                        state[k] = [str(x) for x in data[k]][-HISTORY_LEN:]
+                    else:
+                        state[k] = [x for x in data[k]
+                                    if isinstance(x, (int, float))][-HISTORY_LEN:]
+            elif isinstance(default, str):
+                if isinstance(data.get(k), str):
+                    state[k] = data[k]
+            elif isinstance(data.get(k), int) or (k == "tip_pending"
+                                                   and isinstance(data.get(k), float)):
                 state[k] = data[k]
+        # A bust saved under an older, longer pit-boss watch still only lasts
+        # PIT_BOSS_WATCH spins.
+        state["heat"] = max(0, min(state["heat"], PIT_BOSS_WATCH))
         return state
     except Exception:  # noqa: BLE001 - missing/corrupt state -> fresh bankroll
-        return dict(DEFAULT_STATE)
+        return fresh_state()
+
+
+def fresh_state():
+    state = dict(DEFAULT_STATE)
+    state["history"] = []
+    state["tip_log"] = []
+    return state
 
 
 def save_state(state):
@@ -429,6 +468,11 @@ class Style:
 
     def red(self, t):
         return self._wrap("1;31", t)
+
+    def pocket(self, color, t):
+        """A pocket on the real wheel: white text on a red/black/green felt."""
+        code = {"red": "1;97;41", "black": "1;97;40", "green": "1;97;42"}.get(color, "0")
+        return self._wrap(code, t)
 
     def slot(self, color, t):
         code = {"red": "1;31", "black": "1;37", "green": "1;32",
@@ -682,8 +726,24 @@ def show_stats(style):
     print(f"  Streak:       {s['streak']}  (best {s['best_streak']})")
     print(f"  Biggest win:  {s['biggest_win']} 🪙")
     print(f"  Times broke:  {s['broke_count']} 😬")
+    if s["wagered"]:
+        ret = 100.0 * s["net"] / s["wagered"]
+        print(f"  Wagered:      {s['wagered']} 🪙  (net {s['net']:+d}, "
+              f"{ret:+.1f}% return — the house edge is 0%)")
+    print(f"  This run:     #{s['run']} · {s['chips']}/{GOAL:,} 🪙 · {s['run_spins']} spins"
+          f" · {s['run_begs']} begs"
+          + (f" · busted {s['run_caught']}× (pit boss risk ×{2 ** s['run_caught']})"
+             if s["run_caught"] else ""))
+    best = f" (fastest: {s['best_run']} spins)" if s["best_run"] else ""
+    print(f"  Banks broken: {s['banks_broken']} 🏦{best}")
+    if s["tips"] or s["rigs"] or s["caught"]:
+        print(f"  Bribery:      {s['tips']} 🪙 tipped · {s['rigs']} rigged spins · "
+              f"caught {s['caught']} time{'s' if s['caught'] != 1 else ''} 🚨")
+    hist = format_history(style, s["history"])
+    if hist:
+        print("  Recent:       " + hist)
     print()
-    print(style.dim("  Place a bet:  roulette --bet 10 --on red|black|green|jackpot"))
+    print(style.dim("  Sit down:     roulette          one spin:  roulette --bet 10 --on red"))
     if s["chips"] <= 0:
         print(style.dim("  Flat broke?   roulette --beg"))
     return 0
@@ -700,6 +760,7 @@ def beg(style):
         return 0
 
     state["broke_count"] += 1
+    state["run_begs"] += 1
     state["chips"] += 100
     level = min(state["broke_count"], len(BEG_LEVELS))
     print("  " + style.accent("🙏 you grovel before the house…"))
@@ -752,7 +813,7 @@ def settle_bet(style, winner, bet, target):
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
 
     if state["chips"] <= 0:
-        print(style.dim("  Out of chips — top back up with: roulette --reset"))
+        print(style.dim("  Out of chips — beg for more: roulette --beg"))
     save_state(state)
     return 0
 
@@ -832,9 +893,1556 @@ def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
         print(style.red(f"  ❌ YOU LOSE  -{bet} 🪙") + note
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
     if state["chips"] <= 0:
-        print(style.dim("  Out of chips — top back up with: roulette --reset"))
+        print(style.dim("  Out of chips — beg for more: roulette --beg"))
     save_state(state)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# The real wheel: single-zero (European) layout with ZERO house edge.
+#
+# On a normal casino wheel the 0 is where the house makes its money: every
+# bet pays as if there were 36 pockets, but there are 37. Here the 0 is a
+# SUPER SPIN pocket instead:
+#
+#   * bets on 0 pay 36:1                      (1/37 * 36 - 36/37 = 0)
+#   * every other bet rides a re-spin on 1-36 (0 is removed for the re-spin)
+#
+# so a bet covering k of the numbers 1-36 at the standard 36/k - 1 payout
+# wins with probability exactly k/36 and has an expected value of exactly 0.
+# Every loss has a matching way to win; the house keeps nothing.
+# ---------------------------------------------------------------------------
+WHEEL_ORDER = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8,
+               23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12,
+               35, 3, 26]
+SUPER_WHEEL_ORDER = [n for n in WHEEL_ORDER if n != 0]
+RED_NUMBERS = frozenset({1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27,
+                         30, 32, 34, 36})
+_ONE_TO_36 = range(1, 37)
+
+OUTSIDE_BETS = {
+    "red":    ("RED",       RED_NUMBERS),
+    "black":  ("BLACK",     frozenset(n for n in _ONE_TO_36 if n not in RED_NUMBERS)),
+    "odd":    ("ODD",       frozenset(n for n in _ONE_TO_36 if n % 2)),
+    "even":   ("EVEN",      frozenset(n for n in _ONE_TO_36 if n % 2 == 0)),
+    "low":    ("1-18",      frozenset(range(1, 19))),
+    "high":   ("19-36",     frozenset(range(19, 37))),
+    "dozen1": ("1st 12",    frozenset(range(1, 13))),
+    "dozen2": ("2nd 12",    frozenset(range(13, 25))),
+    "dozen3": ("3rd 12",    frozenset(range(25, 37))),
+    "col1":   ("column 1",  frozenset(range(1, 37, 3))),
+    "col2":   ("column 2",  frozenset(range(2, 37, 3))),
+    "col3":   ("column 3",  frozenset(range(3, 37, 3))),
+}
+BET_ALIASES = {
+    "r": "red", "b": "black", "rouge": "red", "noir": "black",
+    "impair": "odd", "pair": "even", "manque": "low", "passe": "high",
+    "1-18": "low", "19-36": "high",
+    "d1": "dozen1", "1st12": "dozen1", "first12": "dozen1", "1-12": "dozen1",
+    "d2": "dozen2", "2nd12": "dozen2", "second12": "dozen2", "13-24": "dozen2",
+    "d3": "dozen3", "3rd12": "dozen3", "third12": "dozen3", "25-36": "dozen3",
+    "c1": "col1", "column1": "col1", "c2": "col2", "column2": "col2",
+    "c3": "col3", "column3": "col3",
+    "zero": "0", "green": "0", "g": "0",
+}
+
+BET_HELP = """\
+  outside   red  black  odd  even  low (1-18)  high (19-36)        pay 1:1
+            d1 d2 d3 (dozens)   col1 col2 col3 (columns)            pay 2:1
+  inside    17 (straight, 35:1)   17/18 or 17/20 (split, 17:1)
+            7-9 (street, 11:1)    1/2/4/5 (corner, 8:1)   1-6 (six line, 5:1)
+  zero      0 or green (36:1 — lands on 0, everything else gets a SUPER SPIN)"""
+
+
+def number_color(n):
+    if n == 0:
+        return "green"
+    return "red" if n in RED_NUMBERS else "black"
+
+
+def payout_for(numbers):
+    """Fair payout (net profit multiple) for a bet covering `numbers`."""
+    if numbers == {0}:
+        return 36
+    return 36 // len(numbers) - 1
+
+
+def _inside_kind(nums):
+    """Name the inside bet covering `nums`, or None if it isn't a legal one."""
+    s = sorted(nums)
+    if s == [0]:
+        return "straight"
+    if not s or any(not 1 <= x <= 36 for x in s):
+        return None
+    a, k = s[0], len(s)
+    if k == 1:
+        return "straight"
+    if k == 2 and (s[1] - a == 3 or (s[1] - a == 1 and a % 3 != 0)):
+        return "split"
+    if k == 3 and a % 3 == 1 and s == [a, a + 1, a + 2]:
+        return "street"
+    if k == 4 and a % 3 != 0 and s == [a, a + 1, a + 3, a + 4]:
+        return "corner"
+    if k == 6 and a % 3 == 1 and s == list(range(a, a + 6)):
+        return "six line"
+    return None
+
+
+def parse_target(text):
+    """Turn 'red', '17', '17/18', '7-9', 'd2', ... into a bet dict (no stake)."""
+    t = text.strip().lower().replace(" ", "")
+    t = BET_ALIASES.get(t, t)
+    if t in OUTSIDE_BETS:
+        lbl, nums = OUTSIDE_BETS[t]
+        return {"key": t, "label": lbl, "numbers": nums, "payout": payout_for(nums)}
+    try:
+        if re.fullmatch(r"\d+-\d+", t):
+            a, b = sorted(int(x) for x in t.split("-"))
+            nums = frozenset(range(a, b + 1))
+        else:
+            parts = [x for x in re.split(r"[,/+-]", t) if x]
+            if not parts:
+                raise ValueError
+            nums = frozenset(int(x) for x in parts)
+    except ValueError:
+        raise ValueError(f"don't know how to bet on '{text}'") from None
+    for key, (lbl, onums) in OUTSIDE_BETS.items():
+        if nums == onums:
+            return {"key": key, "label": lbl, "numbers": onums, "payout": payout_for(onums)}
+    kind = _inside_kind(nums)
+    if kind is None:
+        raise ValueError(f"'{text}' isn't a legal bet on the table "
+                         "(splits/corners must be neighbours on the layout)")
+    s = sorted(nums)
+    if kind == "straight":
+        lbl = "0 (zero)" if s == [0] else str(s[0])
+    elif kind in ("street", "six line"):
+        lbl = f"{kind} {s[0]}-{s[-1]}"
+    else:
+        lbl = f"{kind} " + "/".join(map(str, s))
+    key = "/".join(map(str, s))
+    return {"key": key, "label": lbl, "numbers": nums, "payout": payout_for(nums)}
+
+
+def describe_number(n):
+    if n == 0:
+        return "ZERO"
+    parts = [number_color(n).upper(), "ODD" if n % 2 else "EVEN",
+             "LOW" if n <= 18 else "HIGH", ("1st", "2nd", "3rd")[(n - 1) // 12] + " 12",
+             f"col {(n - 1) % 3 + 1}"]
+    return " · ".join(parts)
+
+
+def pocket_text(style, n, width=4):
+    return style.pocket(number_color(n), f"{n:^{width}}")
+
+
+def render_table(style):
+    """The felt: 0 on the left, 3 rows of 12, then dozens and even-money boxes."""
+    lines = []
+    rows = [range(3, 37, 3), range(2, 37, 3), range(1, 37, 3)]
+    for i, row in enumerate(rows):
+        zero = style.pocket("green", "  0  " if i == 1 else "     ")
+        cells = "".join(style.pocket(number_color(n), f"{n:^4}") for n in row)
+        lines.append("  " + zero + "│" + cells + "│ " + style.dim(f"col{3 - i} 2:1"))
+    pad = "  " + " " * 5 + " "
+    lines.append(pad + "".join(style.dim(f"{d:^16}") for d in ("1st 12 · d1", "2nd 12 · d2", "3rd 12 · d3")))
+    evens = [("1-18", None), ("EVEN", None), ("RED", "red"), ("BLACK", "black"),
+             ("ODD", None), ("19-36", None)]
+    lines.append(pad + "".join(style.pocket(c, f"{t:^8}") if c else style.dim(f"{t:^8}")
+                                for t, c in evens))
+    return lines
+
+
+def print_table(style):
+    print()
+    for line in render_table(style):
+        print(line)
+    print()
+    print(BET_HELP)
+    print()
+    print("  " + style.pocket("green", " 0 ") + style.accent(" = SUPER SPIN")
+          + style.dim(" — bets on 0 pay 36:1, every other bet rides a re-spin on 1–36."))
+    print(style.dim("  Every bet has an expected value of exactly zero.  House edge: ")
+          + style.bright("0.00%"))
+    print(style.dim("  (Your croupier, on the other hand, can be bribed.)"))
+
+
+def wheel_spin(style, order, result, *, frames=62):
+    """Animate a horizontal strip of the wheel sliding under the ball."""
+    n = len(order)
+    width = term_width()
+    visible = max(5, min(15, (width - 6) // 4))
+    if visible % 2 == 0:
+        visible -= 1
+    half = visible // 2
+    end = order.index(result) + 3 * n
+    start = end - (frames - 1)
+
+    start_delay, end_delay = 0.012, 0.30
+    delays = [start_delay + (end_delay - start_delay) * ((i / (frames - 1)) ** 2.6)
+              for i in range(frames)]
+
+    bar = "─" * (visible * 4)
+    marker = " " * (3 + half * 4)
+
+    def render(center, landed=False):
+        cells = []
+        for off in range(-half, half + 1):
+            num = order[(center + off) % n]
+            if off == 0 and not style.enabled:
+                cells.append(f"[{num:>2}]")
+            else:
+                cells.append(pocket_text(style, num))
+        ball = style.bright(" ●" if landed else " ▼")
+        return [marker + ball, "  ┌" + bar + "┐", "  │" + "".join(cells) + "│",
+                "  └" + bar + "┘", marker + style.bright(" ▲")]
+
+    out = sys.stdout
+    out.write(HIDE_CURSOR)
+    try:
+        for f in range(frames):
+            lines = render(start + f, landed=(f == frames - 1))
+            if f:
+                out.write(f"\033[{len(lines)}A")
+            out.write("\r" + "\n".join(l + CLEAR_LINE for l in lines) + "\n")
+            out.flush()
+            time.sleep(delays[f])
+    finally:
+        out.write(SHOW_CURSOR)
+        out.flush()
+
+
+def announce(style, n, prefix="🎯"):
+    print("  " + prefix + "  " + style.pocket(number_color(n), f"  {n}  ")
+          + "  " + style.bright(describe_number(n)))
+
+
+def _flash_felt(style, cycles=18):
+    """Light up the table for a super spin: flash red / black / green."""
+    out = sys.stdout
+    if not out.isatty() or not style.enabled:
+        return
+    width = min(term_width(), 60) - 4
+    colors = ("red", "black", "green")
+    out.write(HIDE_CURSOR)
+    try:
+        for i in range(cycles):
+            out.write("\r  " + style.pocket(colors[i % 3], " " * width))
+            out.flush()
+            time.sleep(0.03 + (i / cycles) * 0.12)
+        out.write("\r" + CLEAR_LINE)
+        out.flush()
+    finally:
+        out.write(SHOW_CURSOR)
+        out.flush()
+
+
+def throw_ball():
+    """Return (first, second): second is the super-spin number when first == 0."""
+    first = random.randrange(37)
+    second = random.randint(1, 36) if first == 0 else None
+    return first, second
+
+
+def settle_round(bets, first, second):
+    """Resolve every bet. Returns [(bet, outcome, profit)] with outcome win|lose."""
+    results = []
+    for b in bets:
+        if first in b["numbers"]:
+            won = True
+        elif first == 0:
+            won = second in b["numbers"]  # rides the super spin
+        else:
+            won = False
+        profit = b["stake"] * b["payout"] if won else -b["stake"]
+        results.append((b, won, profit))
+    return results
+
+
+def apply_round(state, bets, first, second, results):
+    net = sum(p for _, _, p in results)
+    stake = sum(b["stake"] for b in bets)
+    state["chips"] += net
+    state["spins"] += 1
+    state["run_spins"] += 1
+    state["wagered"] += stake
+    state["net"] += net
+    if net > 0:
+        state["wins"] += 1
+        state["streak"] += 1
+        state["best_streak"] = max(state["best_streak"], state["streak"])
+        state["biggest_win"] = max(state["biggest_win"], net)
+    elif net < 0:
+        state["losses"] += 1
+        state["streak"] = 0
+    else:
+        state["pushes"] += 1
+    state["history"] = (state["history"] + [f"0>{second}" if first == 0 else str(first)])[-HISTORY_LEN:]
+    return net
+
+
+def format_history(style, history, limit=12):
+    out = []
+    for h in history[-limit:]:
+        if h.startswith("0>"):
+            try:
+                n = int(h[2:])
+            except ValueError:
+                continue
+            out.append(style.pocket("green", " 0") + style.pocket(number_color(n), f"→{n} "))
+        else:
+            try:
+                n = int(h)
+            except ValueError:
+                continue
+            out.append(style.pocket(number_color(n), f" {n} "))
+    return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Flavor: a fancy croupier, a badly behaved ball, the Martingale police,
+# fireworks, and tipping. All of it is cosmetic -- none of it touches the odds.
+# A separate RNG keeps --seed spins reproducible however chatty the croupier gets.
+# ---------------------------------------------------------------------------
+FLAVOR = random.Random()
+# Tonight's croupier is drawn at random from this roster of very fancy people.
+# Each brings a language to swear in, a word for "thanks" and one for "wow".
+CROUPIERS = [
+    ("Gaston",        "he",  "French",   "Merci",          "MAGNIFIQUE"),
+    ("Jean-Luc",      "he",  "French",   "Merci",          "FORMIDABLE"),
+    ("Céleste",       "she", "French",   "Merci beaucoup", "INCROYABLE"),
+    ("Margaux",       "she", "French",   "Merci",          "SUPERBE"),
+    ("Lorenzo",       "he",  "Italian",  "Grazie",         "MAGNIFICO"),
+    ("Valentina",     "she", "Italian",  "Grazie mille",   "STUPENDO"),
+    ("Maximilian",    "he",  "German",   "Danke schön",    "WUNDERBAR"),
+    ("Anastasia",     "she", "Russian",  "Spasibo",        "BRAVO"),
+    ("Alejandro",     "he",  "Spanish",  "Gracias",        "INCREÍBLE"),
+    ("Esmeralda",     "she", "Spanish",  "Muchas gracias", "FANTÁSTICO"),
+    ("Reginald",      "he",  "the King's English", "Much obliged", "SPLENDID"),
+    ("Penelope",      "she", "the King's English", "Ever so kind", "MARVELLOUS"),
+    ("Thaddeus",      "he",  "Latin",    "Gratias",        "MIRABILE"),
+    ("Octavia",       "she", "Latin",    "Gratias tibi",   "MIRABILE DICTU"),
+    ("Leopold",       "he",  "German",   "Danke vielmals", "PRACHTVOLL"),
+    ("Ottoline",      "she", "the King's English", "Terribly kind", "SMASHING"),
+    ("Dmitri",        "he",  "Russian",  "Bolshoe spasibo", "VELIKOLEPNO"),
+    ("Séraphine",     "she", "French",   "Merci mille fois", "SUBLIME"),
+    ("Giacomo",       "he",  "Italian",  "Grazie tante",   "FANTASTICO"),
+    ("Astrid",        "she", "Swedish",  "Tack så mycket", "FANTASTISKT"),
+    ("Rodrigo",       "he",  "Portuguese", "Obrigado",     "MARAVILHOSO"),
+]
+_PRONOUNS = {"he": ("he", "He", "his", "him", "himself"),
+             "she": ("she", "She", "her", "her", "herself")}
+
+
+def pick_croupier(rng, name=None, exclude=None):
+    """A croupier by name, or a random one (never `exclude`)."""
+    roster = [c for c in CROUPIERS if c[0] == name] or \
+        [c for c in CROUPIERS if c[0] != exclude] or CROUPIERS
+    name, pron, lang, thanks, wow = rng.choice(roster)
+    he, He, his, him, himself = _PRONOUNS[pron]
+    return {"name": name, "he": he, "He": He, "his": his, "him": him, "himself": himself,
+            "lang": lang, "thanks": thanks, "wow": wow}
+
+
+DEALER = pick_croupier(FLAVOR)
+
+
+def set_dealer(d):
+    DEALER.clear()
+    DEALER.update(d)
+
+
+def ensure_dealer(state):
+    """Tonight's croupier stays with you for the whole run."""
+    if state["croupier"] in {c[0] for c in CROUPIERS}:
+        set_dealer(pick_croupier(FLAVOR, name=state["croupier"]))
+    else:
+        set_dealer(pick_croupier(FLAVOR))
+        state["croupier"] = DEALER["name"]
+        save_state(state)
+
+
+def replace_dealer(state):
+    """Bring in a new croupier (after a firing, or for a new run)."""
+    set_dealer(pick_croupier(FLAVOR, exclude=DEALER.get("name")))
+    state["croupier"] = DEALER["name"]
+
+
+def fx(text, **kw):
+    """Fill a line in with tonight's croupier (name, pronouns, language...)."""
+    return text.format(**DEALER, **kw)
+MISBEHAVE_ODDS = 200  # 1 spin in N, the ball makes a break for it
+
+QUIPS = {
+    "straight": [
+        "{label}? A romantic. {name} respects that.",
+        "{label}. Your birthday, or your ex's?",
+        "Straight up on {label}. One in thirty-six. {name} crosses {his} fingers. Not for you.",
+        "{label}, eh? The wheel has never heard of it.",
+        "Ah, {label}. {name}'s grandmother also loved {label}. She died poor.",
+        "{label}. {name} writes it on a napkin, just in case it's a lottery number.",
+        "{label}. {name} gives that number a respectful little nod. It's been through a lot.",
+        "One number. {label}. {name} admires your confidence and fears for your wallet.",
+        "{label}? {name} hasn't seen that one come up since… well, since last Tuesday.",
+        "\"{label},\" repeats {name}, slowly, like you've just named your firstborn.",
+        "{label}! The ball has been warned. The ball does not care.",
+        "Straight up on {label}. {name} whispers 'thirty-five to one' like a prayer.",
+        "{label}. Bold. {name} once saw someone win on {label}. They cried for a week.",
+        "{label}. {name} pats the number gently, like a nervous racehorse.",
+    ],
+    "zero": [
+        "Betting on zero. You want the super spin, don't you.",
+        "Zero! The only number that pays 36. {name} approves of your chaos.",
+        "On the green. {name} admires a player who bets on nothing.",
+        "Zero. {name} respects anyone who bets on the void and expects it to pay.",
+        "Zero. You're betting on the one number that pays 36. {name} admires the greed.",
+        "The green pocket. {name} suspects you just like the colour.",
+        "Zero! {name} adds a little super-spin sparkle to your chip. ✨",
+        "Betting on nothing. Philosophically, {name} approves.",
+        "Zero again? {name} is starting to think you know something.",
+    ],
+    "even": [
+        "{label}. Safe. Sensible. {name} is stifling a yawn.",
+        "{label}. The beige cardigan of bets.",
+        "A coin flip on {label}. {name} could have done that with {his} own coin.",
+        "{label}. Your accountant would be proud. {name} is merely awake.",
+        "{label}. {name} has seen more daring choices at a salad bar.",
+        "{label}. Half the wheel. {name} is thrilled for you. Mildly.",
+        "{label}. The 'I'd like to keep my house' bet. Very wise.",
+        "{label}. {name} has seen braver bets at a church raffle.",
+        "Even money on {label}. {name} stifles a yawn so hard {his} ears pop.",
+        "{label}. A classic. Like a beige sofa. Or a beige anything.",
+        "{label}. {name} applauds your restraint, slowly, with two fingers.",
+        "{label}, eh? Safe, sensible, and {name} is already forgetting it.",
+    ],
+    "outside2": [
+        "{label}. Twelve numbers. Hedging your bets, are we?",
+        "{label} — the bet of someone who reads the manual.",
+        "{label}. A third of the wheel. {name} calls that 'commitment issues'.",
+        "{label}. Twelve whole numbers. {name} calls that a buffet bet.",
+        "{label}. You like your odds like your coffee: one-third full.",
+        "{label}. {name} respects a bet that pays twice and judges silently.",
+        "{label}. Not too brave, not too boring. The Goldilocks bet.",
+        "{label}. {name} nods. \"A sensible amount of chaos.\"",
+        "{label}. {name} has a cousin who only bets on {label}. He's doing fine. Ish.",
+    ],
+    "inside": [
+        "{label}. Ooh, technical. {name} didn't know you knew that one.",
+        "{label}. Very fancy. The wheel is not impressed, but {name} is.",
+        "{label}. {name} squints at the layout to check that's even legal. It is. Barely.",
+        "{label}. Look at you, using the advanced menu.",
+        "{label}. {name} raises an eyebrow. \"Somebody's read a book.\"",
+        "{label}. {name} pretends that's a normal thing people bet on.",
+        "{label}. A connoisseur's bet. {name} would offer you a monocle if {he} had one.",
+        "{label}. Fancy. The wheel straightens its tie.",
+        "{label}. {name} whispers \"respect\" and moves your chips into perfect alignment.",
+    ],
+    "big": [
+        "{stake} 🪙 on {label}? {name} straightens {his} bow tie.",
+        "That is a lot of chips on {label}. {name} signals for a defibrillator, just in case.",
+        "{stake} 🪙 on {label}. {name} quietly moves {his} coffee away from the table.",
+        "{stake} 🪙 on {label}. {name} quietly cancels {his} dinner plans to watch this.",
+        "{stake} 🪙? On {label}? {name} has to steady the table.",
+        "That's {stake} 🪙 on {label}. {name} asks if you'd like a moment alone with it.",
+        "{name} looks at {stake} 🪙 on {label}, then at you, then at the ceiling. Praying.",
+        "{stake} 🪙. {name} counts it twice, because surely you didn't mean that.",
+        "{stake} 🪙 on {label}. Somewhere in the casino, an accountant faints.",
+    ],
+    "all_in": [
+        "ALL IN on {label}. {name} quietly slides the tissues closer.",
+        "Everything on {label}. The table goes silent. Somebody drops a martini.",
+        "All of it? On {label}? {name} admires you. {name} would never.",
+        "All in on {label}. {name} crosses {himself}, then crosses you for good measure.",
+        "Every chip on {label}. {name} dims the lights for dramatic effect.",
+        "ALL IN on {label}. {name} hums a sad song in {lang}. Just in case.",
+        "All in. {name} hands you a stress ball shaped like a roulette ball.",
+        "Everything on {label}? {name} loves a player with no backup plan.",
+        "ALL of it. On {label}. {name} quietly puts the beg wall on standby.",
+        "All in on {label}. The other tables stop to watch. Someone starts filming.",
+    ],
+    "win": [
+        "A winner. {name} pays you with only a little resentment.",
+        "+{net} 🪙. Don't let it go to your head.",
+        "You win. {name} pretends to be happy for you.",
+        "Paid. {name} will remember this.",
+        "You win. {name} hands the chips over one at a time, very slowly, for emphasis.",
+    ],
+    "big_win": [
+        "+{net} 🪙! {name} has to sit down.",
+        "The pit boss is staring at {name}. {name} is staring at you. +{net} 🪙.",
+        "{wow}. {name} will be explaining this to management.",
+        "+{net} 🪙. {name} checks the wheel for loose screws. There are none. Annoyingly.",
+    ],
+    "lose": [
+        "The house thanks you. Well, it would, if it had an edge.",
+        "{name} sweeps your chips away with a little flourish.",
+        "Not this time. The wheel sends its regards.",
+        "Unlucky. {name} has seen worse. Not much worse.",
+        "{name} sweeps your chips away and says \"{thanks}\" with no irony whatsoever.",
+    ],
+    "big_loss": [
+        "Ouch. {name} winces on your behalf.",
+        "{lost} 🪙, gone. {name} observes a moment of silence.",
+        "That hurt to watch. {name} will need a moment.",
+        "{lost} 🪙. {name} offers you a small, sympathetic mint.",
+    ],
+    "push": [
+        "Net zero. You have achieved perfect fairness. Congratulations?",
+        "You broke exactly even. {name} finds this deeply unsatisfying.",
+        "Exactly even. {name} wonders aloud why you bothered.",
+    ],
+    "zero_spin": [
+        "ZERO! Nobody panic. Well — panic a little.",
+        "The green pocket! {name} lives for this.",
+        "Zero. On a normal table, this is where you'd lose. Not here.",
+        "ZERO! {name} rings the little super-spin bell with tremendous enthusiasm. 🔔",
+    ],
+    "broke": [
+        "And that's the last chip. {name} gestures politely at the beg wall.",
+        "Flat broke. {name} hands you a napkin and a sad little nod.",
+        "You've run out of chips. The good news: begging is free.",
+        "Broke. {name} slides you a pamphlet titled 'So You've Lost Everything'.",
+    ],
+    "accomplice": [
+        "{name} gives you the slightest nod. 🤫",
+        "{name} cracks {his} knuckles and winks. The plan is in motion.",
+        "{name} whispers something to the wheel in {lang}.",
+        "{name} blows on the ball and glances at the pit boss. All clear.",
+        "{name} taps the side of {his} nose. You have no idea what it means.",
+        "{name} drums {his} fingers on the rail in a pattern only you two understand.",
+    ],
+    "rigged": [
+        "{name} taps {his} nose. That was no accident. 😏",
+        "\"What a lucky bounce,\" says {name}, not looking at you at all.",
+        "{name} whistles innocently and polishes the wheel.",
+        "The ball lands exactly where {name} told it to. Nobody saw a thing.",
+        "\"{wow},\" says {name}, with all the surprise of someone who planned it.",
+        "{name} adjusts {his} cufflinks. The ball adjusts its landing. Coincidence.",
+    ],
+    "honest": [
+        "{name} watches your bets very carefully.",
+        "{name} spins with both hands clearly visible.",
+        "{name} glances at the security camera, then at you.",
+        "{name} spins with exaggerated, almost theatrical fairness.",
+    ],
+    "honest_tip": [
+        "{name} pushes your chips back. \"I saw what happened to the last one.\"",
+        "\"No tips. No winks. No funny business,\" says {name}.",
+        "{name} hands the chips back with a look that could curdle milk.",
+        "\"I'm honest now,\" says {name}. \"It's terrible. Please stop.\"",
+    ],
+    "help_maxed": [
+        "{name} is already helping as much as {he} dares. This one's just a gift.",
+        "\"Any more help and they'll notice,\" whispers {name}, pocketing it anyway.",
+        "{name} is cheating as hard as {he} legally-ish can. The extra goes in the getaway fund.",
+        "\"The wheel is already ours,\" says {name}. \"This is just for the getaway car.\"",
+        "\"Any more luck and you'll glow,\" whispers {name}, accepting it anyway.",
+        "{name} is rigging at maximum. Any more and the wheel will start spinning backwards.",
+        "\"You're already my favourite,\" says {name}. \"This just makes you my favourite-er.\"",
+        "{name} pockets it with a wink. \"Luck's full, but I'll buy the ball a tiny hat.\"",
+    ],
+    "victory": [
+        "\"We did it,\" whispers {name}. \"Now act natural.\"",
+        "{name} is already booking a flight to somewhere without extradition.",
+        "{name} shakes your hand and slips away through the kitchen.",
+        "\"{wow}!\" {name} is hugging you. Security is looking. Stop hugging.",
+        "{name} slides you the bank's keys and asks, very quietly, for a reference.",
+    ],
+}
+
+MARTINGALE_QUIPS = {
+    2: "Doubling after a loss? Ah, the Martingale. {name} has seen this film.",
+    3: "Doubled again: {stake} 🪙 to win back {unit} 🪙. The math works right up until it doesn't.",
+    4: "Fourth double in a row. The pit boss brings popcorn. 🍿",
+    5: "The Martingale has a perfect record: it works every time, until you run out of chips.",
+}
+MARTINGALE_MAX = ("{stake} 🪙 on double #{level}. The house has a frame for people "
+                  "like you, right next to the beg wall. 🖼️")
+MARTINGALE_PAYOFF = ("And the Martingale pays off: all that sweat for +{net} 🪙. "
+                     "{name} slow-claps. 👏")
+MARTINGALE_BUST = "The Martingale claims another victim. {name} adds you to the wall."
+
+PIT_BOSS_SCENES = [
+    ["🚨  The pit boss has been watching the replay.",
+     "\"{name}. My office. Now.\"",
+     "Your winning bets are confiscated."],
+    ["🚨  A man in a very expensive suit taps {name} on the shoulder.",
+     "{name} drops the ball. Literally.",
+     "Your bets are seized as evidence."],
+    ["🚨  Alarms. Spotlights. Someone yells \"FREEZE!\"",
+     "{name} tries to look casual and fails catastrophically.",
+     "Your chips on the table are gone."],
+    ["🚨  The pit boss counts {name}'s pockets. And counts. And counts.",
+     "\"That's a lot of tips for a {lang} croupier,\" she says.",
+     "Your bets are void."],
+    ["🚨  The pit boss lowers her newspaper. It had eye holes cut in it.",
+     "\"Nice wrist work, {name}. Very nice. Get out.\"",
+     "Your bets are confiscated as a souvenir."],
+    ["🚨  The lights dim. A single spotlight lands on {name}.",
+     "Somewhere, a violin plays one long, accusing note.",
+     "Your bets are confiscated by a man who does not blink."],
+    ["🚨  The pit boss slides a photo across the felt: {name}, mid-wink.",
+     "\"Care to explain the wink, {name}?\" {He} cannot.",
+     "Your bets are seized as exhibit A."],
+    ["🚨  The casino cat 🐈 stares at {name}, then at the pit boss. It has talked.",
+     "{name} hisses \"traitor\" at the cat in {lang}.",
+     "Your chips on the table are impounded."],
+    ["🚨  Six security guards appear from behind a single potted plant.",
+     "{name} tries to hide behind the same plant. It does not work.",
+     "Your bets are swept into an evidence bag."],
+    ["🚨  The pit boss replays the spin in slow motion on a giant screen.",
+     "In slow motion, {name}'s pinky is clearly doing crimes.",
+     "Your bets are void. The crowd boos."],
+]
+
+MISBEHAVIOURS = [
+    ["the ball hops the rim…", "…ricochets off a cocktail glass…",
+     "…and rolls under table six.", "{name} crawls after it, swearing in {lang}.",
+     '"My apologies. We go again."'],
+    ["the ball leaps out of the wheel…", "…and lands in a gentleman's martini. 🍸",
+     "He drinks it anyway.", "{name} produces a spare ball from {his} sleeve."],
+    ["the ball spins so fast it starts to hover…", "a pit boss appears…",
+     "the ball, embarrassed, drops back into the wheel."],
+    ["the ball jumps out and rolls for the exit. 🚪", "It almost makes it.",
+     "{name} dives. {name} catches it. The crowd applauds."],
+    ["the ball pops out and the casino cat 🐈 bats it under a slot machine.",
+     "Two minutes of negotiation later, the cat accepts a tip.", "Re-throwing…"],
+    ["the ball bounces off the wheel and into {name}'s breast pocket.",
+     "{name} pats {his} chest, finds it, and looks deeply betrayed.", '"Again. Properly, this time."'],
+    ["the ball leaps out and lands in the chandelier. 💡",
+     "It swings there, gently, judging everyone.",
+     "{name} fetches it with a very long croupier rake. \"We go again.\""],
+    ["the ball pops out and rolls into a stranger's handbag. 👜",
+     "The stranger refuses to give it back without a receipt.",
+     "{name} negotiates in {lang}. The ball is returned. Re-throwing…"],
+    ["the ball shoots off the wheel and ricochets around the room like a pinball…",
+     "…ding… ding… DING…",
+     "…straight back into {name}'s hand. Nobody believes it. Re-throwing."],
+    ["the ball escapes, rolls across the floor and stops at the pit boss's shoe.",
+     "The pit boss picks it up, inspects it, and slowly hands it back.",
+     "{name} has never thrown a ball so honestly. Re-throwing…"],
+]
+
+# The crooked croupier remembers who tipped recently. Each chip you tip buys
+# HELP_PER_CHIP of luck, up to HELP_MAX, and fades by 1/TIP_WINDOW every betting
+# spin (a 1-chip tip: +5%, +4.5%, +4% ... gone after TIP_WINDOW spins). When
+# you're about to lose, they rig the spin your way with that chance. The pit boss notices a rig with chance (rigged
+# winnings / NOTICE_PER). Get caught: the bets are seized, your recent tips are
+# wasted, and an honest croupier runs the rest of the run.
+# Tuned so steady tipping lifts the odds of breaking the bank from 10% to ~40%,
+# while over-tipping costs more than it's worth.
+#
+# Tip 0 and it counts as ZERO_TIP_PENALTY chips *against* you: luck can go
+# negative, and an offended croupier then spoils winning spins with that chance.
+TIP_WINDOW = 10
+HELP_PER_CHIP = 0.05
+HELP_MAX = 0.30
+NOTICE_PER = 300
+PIT_BOSS_WATCH = 5      # spins you must stay at the table after a bust
+ZERO_TIP_PENALTY = -1   # each 0 tip: -5% luck
+CAP_CHIPS = HELP_MAX / HELP_PER_CHIP  # tips beyond this are just gifts
+
+
+def catch_chance(state, winnings):
+    """How likely the pit boss spots a rig. It grows with the size of the
+    rigged win, and doubles with every bust you've had this run: they know
+    your face now, whichever table you sit at."""
+    return min(0.9, winnings / NOTICE_PER * 2 ** state["run_caught"])
+
+
+def recent_tips(state):
+    """Your tips, faded by age: this spin's count fully, last spin's 90%, ..."""
+    faded = sum(t * (TIP_WINDOW - age) / TIP_WINDOW
+                for age, t in enumerate(reversed(state["tip_log"][-(TIP_WINDOW - 1):]), 1))
+    return faded + state["tip_pending"]
+
+
+def clamp_tips(state):
+    """Keep luck within ±HELP_MAX. There's no hidden reserve: what you see is
+    what you have, and tips past the cap are simply a gift."""
+    over = recent_tips(state) - CAP_CHIPS
+    under = -CAP_CHIPS - recent_tips(state)
+    if over > 0:
+        state["tip_pending"] -= over
+    elif under > 0:
+        state["tip_pending"] += under
+    state["tip_pending"] = round(state["tip_pending"], 4)
+
+
+def luck(state):
+    """Your luck with the croupier, from -HELP_MAX to +HELP_MAX. An honest
+    croupier never helps you, but can still hold a grudge."""
+    value = max(-HELP_MAX, min(HELP_MAX, recent_tips(state) * HELP_PER_CHIP))
+    return min(0.0, value) if state["honest"] else value
+
+
+def help_chance(state):
+    """Chance the croupier rigs your next losing spin your way."""
+    return max(0.0, luck(state))
+
+
+def spite_chance(state):
+    """Chance an offended croupier spoils your next winning spin."""
+    return max(0.0, -luck(state))
+
+
+def luck_text(state):
+    return f"🍀 {luck(state) * 100:+.0f}%"
+
+
+def log_spin_tips(state):
+    """A betted spin happened: roll this spin's tips into the window."""
+    state["tip_log"] = (state["tip_log"] + [state["tip_pending"]])[-TIP_WINDOW:]
+    state["tip_pending"] = 0
+
+
+def rig_target(bets):
+    """Pick the pocket the croupier aims for: one of your bets, weighted by stake."""
+    total = sum(b["stake"] for b in bets)
+    pick = random.uniform(0, total)
+    for b in bets:
+        pick -= b["stake"]
+        if pick <= 0:
+            break
+    return random.choice(sorted(b["numbers"]))
+
+
+def try_rig(state, bets, first, second, results):
+    """If the croupier is on the take and you're losing, maybe rig the spin.
+
+    Returns (first, second, results, rig) where rig is None, or a dict saying
+    whether the pit boss `caught` it.
+    """
+    net = sum(p for _, _, p in results)
+    if net > 0 and random.random() < spite_chance(state):
+        spoilers = [n for n in range(1, 37)
+                    if sum(p for _, _, p in settle_round(bets, n, None)) < 0]
+        if spoilers:
+            n = random.choice(spoilers)
+            return n, None, settle_round(bets, n, None), {"caught": False, "spite": True}
+    if net >= 0 or help_chance(state) <= 0:
+        return first, second, results, None
+    if random.random() >= help_chance(state):
+        return first, second, results, None
+    target = rig_target(bets)
+    r_first, r_second = (0, random.randint(1, 36)) if target == 0 else (target, None)
+    r_results = settle_round(bets, r_first, r_second)
+    winnings = sum(p for _, won, p in r_results if won)
+    if sum(p for _, _, p in r_results) <= 0:
+        return first, second, results, None  # the aim was off; it wouldn't help
+    if random.random() < catch_chance(state, winnings):
+        seized = [(b, False, -b["stake"]) for b, _, _ in r_results]
+        return r_first, r_second, seized, {"caught": True, "spite": False}
+    return r_first, r_second, r_results, {"caught": False, "spite": False}
+
+
+# Tip reactions, by size. Each tier is (minimum tip, key into QUIPS).
+TIP_TIERS = [(1, "tip_small"), (5, "tip_nice"), (25, "tip_big"), (100, "tip_huge")]
+QUIPS.update({
+    "tip_zero": [
+        "Zero chips. {name} stares at your empty hand, then at you. Slowly.",
+        "\"A tip of… nothing?\" {name} has never been so insulted, and {he} has worked bachelor parties.",
+        "{name} accepts your zero chips, places them in a tiny invisible jar, and will remember your face.",
+        "{name} gasps. In {lang}, this is apparently a declaration of war.",
+        "{name} thanks you with exactly as much warmth as you tipped. None.",
+        "You mime handing over a chip. {name} mimes being deeply offended. It is not a mime.",
+        "{name} quietly turns the wheel so your number faces the wall.",
+        "{name} whispers something to the ball in {lang}. The ball looks at you differently now.",
+        "\"Zero. Lovely,\" says {name}, and gives the wheel a little anti-you nudge.",
+        "{name} writes your name in a little black book. Then underlines it. Twice.",
+        "{name} takes a pin from {his} lapel and pokes a hole in your luck. You hear it hiss.",
+        "{name} smiles. It's the smile of someone who decides where the ball lands.",
+        "{name} pretends to drop your nothing in the tip jar, then pretends to spit in it.",
+        "{name} turns to the wheel and loudly says, in {lang}, \"Not this one.\"",
+        "{name} hands your zero chips back. \"Keep it. You clearly need it more.\"",
+        "{name} turns to the next table and loudly asks if anyone there tips.",
+        "\"Nothing. How generous,\" says {name}, and gently tilts the table away from you.",
+        "{name} files your zero tip under 'grudges', alphabetically, near the top.",
+        "{name} breathes on the ball, then wipes it on your side of the felt. Ominous.",
+        "\"In {lang}, we have a word for people like you,\" says {name}. {He} doesn't say it.",
+        "{name} accepts nothing with a deep bow, the most passive-aggressive bow in history.",
+        "{name} whispers to the ball. The ball rolls a little further away from you.",
+    ],
+    "tip_small": [
+        "{name} pockets the {amount} 🪙 and nudges the wheel with {his} pinky. Just a smidge.",
+        "\"{thanks}.\" {name} moves the ball one millimetre closer to your number.",
+        "{amount} 🪙? {name} will cheat for you a little. A modest, budget-friendly amount of cheating.",
+        "{name} winks. It's a small wink. You paid for a small wink.",
+        "{name} slips the chips away and whispers, \"I know a guy. The guy is the wheel.\"",
+        "\"{thanks},\" says {name}, and very slowly starts tilting the table your way.",
+        "{name} breathes on the ball for luck. It's minty. The ball already likes you more.",
+        "{name} taps the wheel twice: the ancient croupier signal for 'this one's with me'.",
+        "Small tip, small favour. {name} promises to 'accidentally' sneeze on your side of the wheel.",
+        "{name} pockets the {amount} 🪙 and murmurs something in {lang}. A blessing. Or a recipe. Either way: luck.",
+        "{name} pockets the {amount} 🪙 and gives the ball a small, encouraging pat.",
+        "\"Every little helps,\" says {name}, nudging the wheel a hair's breadth your way.",
+        "{name} slips your {amount} 🪙 into {his} sock. The wheel creaks in your favour.",
+        "\"{thanks},\" mouths {name}, and taps your number twice on the felt.",
+        "{name} pockets {amount} 🪙 and gives the wheel a secret little thumbs-up.",
+        "{amount} 🪙. {name} is now measurably, suspiciously, on your side.",
+        "{name} cups the chips like a baby bird and nods solemnly. Luck incoming.",
+        "\"A small investment,\" says {name}. \"In a small amount of fraud.\"",
+        "{name} quietly rubs the ball on {his} lucky tie. You notice the tie has your initials.",
+        "{name} tips {his} hat. The wheel tips, very slightly, too.",
+        "\"Noted,\" whispers {name}, making a tiny chalk mark next to your number.",
+        "{name} bites the chip to check it's real. It is. Your luck goes up a notch.",
+    ],
+    "tip_nice": [
+        "{name} beams. \"You are too kind.\" {He} polishes the ball until it gleams in your direction.",
+        "{amount} 🪙! {name} cracks {his} knuckles. The wheel looks nervous.",
+        "\"{thanks}!\" {name} gives the wheel a stern look. The wheel gets the message.",
+        "{name} tucks the {amount} 🪙 away, and suddenly the ball seems very interested in you.",
+        "{name} whispers to the ball in {lang}. You catch the words 'your number' and 'or else'.",
+        "{name} gives you a look that says: 'We're a team now. Don't make it weird.'",
+        "{amount} 🪙. {name} adjusts the wheel's tilt by a suspicious half-degree.",
+        "{name} blows on the ball like it's a pair of dice. Wrong game. Still works, apparently.",
+        "\"Leave it to me,\" murmurs {name}, rolling up {his} sleeve to reveal a second, smaller sleeve.",
+        "{name} pockets the chips and starts quietly humming heist music.",
+        "{amount} 🪙! {name} feeds the wheel a tiny compliment about you.",
+        "{name} cracks a knowing smile and polishes your number with {his} sleeve.",
+        "{amount} 🪙! {name} does a subtle little shimmy and gives the wheel a pep talk.",
+        "{name} accepts {amount} 🪙 and starts warming up {his} wrist like a pitcher.",
+        "\"Now we're talking,\" murmurs {name}, and polishes the pocket you just bet on.",
+        "{name} pockets the chips and casually moves the pit boss's chair to face the wall.",
+        "{name} gives the ball a stern talking-to in {lang}. The ball looks scared. Good.",
+        "{amount} 🪙. {name} hums a lucky tune. You feel luckier. Statistically, you are.",
+        "\"{thanks}!\" {name} oils the wheel. It now spins with a faint, happy squeak.",
+        "{name} slides the chips into a hidden pocket labelled 'for our friend'.",
+        "\"I like you,\" says {name}. The wheel, under pressure, also likes you now.",
+        "{name} gives you a tiny salute. The plan, whatever it is, is on.",
+    ],
+    "tip_big": [
+        "{name} is visibly moved. {He} takes the wheel aside for a private word about you.",
+        "{amount} 🪙?! {name} clutches {his} chest. \"{wow}. Consider the wheel… persuaded.\"",
+        "{name} lights a candle for you, then uses it to warm up the ball. Lucky ball now.",
+        "{name} pulls a tiny magnet out of {his} sleeve, looks at you, and nods. \"Soon.\"",
+        "\"For you, I will do terrible things to this wheel,\" whispers {name}, sincerely.",
+        "{name} starts counting under {his} breath and nudging the wheel with {his} knee.",
+        "{name} gives the ball a pep talk. You're pretty sure {he} called it 'champ'.",
+        "{name} loosens a screw on the wheel. \"Maintenance,\" {he} says, winking so hard it hurts.",
+        "{name} pockets {amount} 🪙 and starts doing quiet stretches. Rigging is cardio.",
+        "\"{wow},\" whispers {name}, and quietly locks the wheel's 'honest mode' away.",
+        "{amount} 🪙! {name} stops pretending this is a fair table.",
+        "{name} accepts {amount} 🪙 and quietly swaps the pit boss's glasses for sunglasses.",
+        "\"For this,\" whispers {name}, \"I will use the special wrist technique.\"",
+        "{name} stacks your chips into a small shrine to your luck.",
+        "{name} cracks every knuckle, one by one. The wheel trembles.",
+        "{amount} 🪙. {name} whispers your number to the ball like it's a password.",
+        "\"{wow},\" breathes {name}. \"The ball and I will discuss your future.\"",
+        "{name} quietly unplugs the security camera and plugs in a lava lamp.",
+    ],
+    "tip_huge": [
+        "{name} weeps openly. {He} names {his} next child after you, and the wheel after {his} next child.",
+        "{amount} 🪙. {name} rings a little bell. Somewhere, a slot machine pays out in solidarity.",
+        "{name} calls {his} mother. \"Mama, I've found someone worth cheating for.\"",
+        "\"{wow}!\" {name} swaps the ball for a heavier one with your name engraved on it.",
+        "{name} kisses the ball, the wheel, and very nearly you.",
+        "{name} hands the pit boss a coffee and a crossword. That should buy you a few spins.",
+        "{name} opens a secret compartment in the table. It's full of luck. Mostly yours now.",
+        "{name} salutes you. From now on, the wheel works for both of you.",
+        "{amount} 🪙. {name} unbuttons {his} jacket to reveal a T-shirt that says 'TEAM YOU'.",
+        "{name} calls the wheel by its first name. They have an understanding now.",
+        "{amount} 🪙?! {name} has to lie down on the felt for a second.",
+        "{name} announces this table is now a 'luck sanctuary'. Nobody questions it.",
+        "{name} hums the national anthem of a country that doesn't exist. It's called You.",
+        "{amount} 🪙. {name} carves your initials into the ball. For luck. Mostly yours.",
+        "\"{wow}!\" {name} kisses the chips, the wheel, and the pit boss (who is confused).",
+        "{name} produces a second, luckier wheel from under the table, then thinks better of it.",
+        "{name} vows, in {lang}, to rig this wheel until the end of time. Or the shift.",
+        "{name} shakes your hand, then shakes the wheel's hand. Everyone's in on it now.",
+    ],
+    "tip_everything": [
+        "{name} is speechless. You tipped {him} everything. {He} vows to win it all back for you.",
+        "Every last chip? {name} is touched, worried, and fully committed to rigging this.",
+        "{name} looks at your empty hands and whispers, \"Now we ride or die.\"",
+        "\"You absolute legend,\" breathes {name}. \"Go beg for chips. I'll handle the wheel.\"",
+        "{name} accepts your final chip like it's a sacred relic. \"I will not waste this.\"",
+        "{name} stares at your last chip, then at you. \"You're either a genius or a disaster.\"",
+        "\"That's everything?\" whispers {name}. \"Then I'll give the wheel everything too.\"",
+        "{name} accepts your final chip and swears to avenge your bankroll.",
+    ],
+    "win_friend": [
+        "+{net} 🪙! {name} does a tiny celebratory shimmy behind the wheel.",
+        "{name} pays you out with a proud, conspiratorial smile. \"Teamwork.\"",
+        "\"That's my favourite customer,\" {name} announces to nobody in particular.",
+        "{name} slides your winnings over and mouths, \"{thanks}.\"",
+        "{name} pays you and whispers, \"Act surprised. You're doing great.\"",
+    ],
+    "big_win_friend": [
+        "+{net} 🪙! {name} has to fake a coughing fit to hide {his} cheering.",
+        "\"{wow}!\" {name} high-fives you under the table.",
+        "{name} pays out +{net} 🪙 and dabs away a happy tear with a betting chip.",
+        "+{net} 🪙! {name} pretends to be devastated for the cameras. Inside, {he} is dancing.",
+    ],
+    "lose_friend": [
+        "{name} winces. \"Not that one. I'll get you next time.\"",
+        "\"The wheel is fighting me,\" whispers {name}. \"Keep the faith.\"",
+        "{name} glares at the ball like it betrayed you both.",
+        "{name} mouths 'sorry' and gives the wheel a very disappointed look.",
+        "\"That one's on me,\" mutters {name}, glaring at {his} own hands.",
+    ],
+    "big_loss_friend": [
+        "{lost} 🪙! {name} looks genuinely heartbroken on your behalf.",
+        "{name} pats your hand. \"We regroup. We rebuild. We rig.\"",
+        "\"That was NOT the plan,\" hisses {name} at the wheel.",
+        "{name} looks at the {lost} 🪙 gone and whispers, \"Revenge. Next spin.\"",
+    ],
+    "push_friend": [
+        "Even. {name} shrugs. \"Better than losing. We'll do better.\"",
+        "{name} nods. \"A draw. The wheel is warming up to you.\"",
+        "Even. {name} gives you a thumbs-up under the table anyway.",
+    ],
+    "broke_friend": [
+        "{name} looks devastated. \"Go beg. I'll keep the wheel warm for you.\"",
+        "Out of chips. {name} slips you a napkin that says 'COME BACK'.",
+        "\"This isn't over,\" whispers {name}. \"Beg, then return to me.\"",
+        "{name} slips you a tiny note: 'Beg. Return. We finish this together.'",
+    ],
+    "win_spite": [
+        "{name} pays you +{net} 🪙 through gritted teeth.",
+        "\"Enjoy it while it lasts,\" says {name}, counting your chips out very slowly.",
+        "{name} hands over your winnings like they're {his} own kidneys.",
+        "A win. {name} makes a note in the little black book.",
+        "{name} pays you, then sighs like {he} is personally losing a kidney.",
+    ],
+    "big_win_spite": [
+        "+{net} 🪙?! {name} looks like {he} just swallowed a lemon whole.",
+        "{name} pays out +{net} 🪙 and asks the wheel, quietly, what it thinks it's doing.",
+        "\"Remarkable,\" says {name}, in the tone people normally use for 'unforgivable'.",
+        "+{net} 🪙. {name} stares at the wheel like it owes {him} money now.",
+    ],
+    "lose_spite": [
+        "{name} smiles for the first time tonight.",
+        "\"Oh no,\" says {name}, completely flatly. \"Anyway.\"",
+        "{name} sweeps your chips away, humming something cheerful in {lang}.",
+        "\"Zero tip, zero sympathy,\" says {name}.",
+        "{name} sweeps your chips away and hums a little victory tune in {lang}.",
+    ],
+    "big_loss_spite": [
+        "{lost} 🪙 gone. {name} has to turn away to hide {his} grin.",
+        "{name} watches {lost} 🪙 vanish and looks deeply, spiritually at peace.",
+        "\"Karma,\" whispers {name}, not even trying to hide it.",
+        "{lost} 🪙 gone. {name} dabs at {his} eyes. Tears of joy.",
+    ],
+    "push_spite": [
+        "Even. {name} looks mildly disappointed you didn't lose.",
+        "Net zero. {name} sniffs. \"Next time.\"",
+        "Even. {name} mutters that you got lucky. You did not. Net zero.",
+    ],
+    "broke_spite": [
+        "Flat broke. {name} waves goodbye with surprising enthusiasm.",
+        "Out of chips. {name} mentions that tipping is, traditionally, a thing people do.",
+        "\"Perhaps begging will teach you generosity,\" says {name}.",
+        "Broke. {name} reminds you that the tip jar has a very short memory.",
+    ],
+    "spite": [
+        "Oops. {name}'s hand slipped. What a shame.",
+        "\"Zero tip, zero luck,\" murmurs {name}.",
+        "{name} smiles sweetly as your winner bounces out of its pocket.",
+        "{name} flicks the ball away from your number. Pettily. Precisely.",
+        "\"Butterfingers,\" says {name}, while not dropping anything at all.",
+    ],
+    "sulk": [
+        "{name} spins the wheel without looking at you. Still sulking about the tip.",
+        "{name} sighs loudly, pointedly, in {lang}, and throws the ball.",
+        "\"Zero,\" mutters {name}, to nobody in particular. Then spins.",
+        "{name} spins without a word, the frostiest spin of the evening.",
+    ],
+})
+
+
+_last_quip = {}
+
+
+def say(style, key, chance=1.0, **kw):
+    """The croupier comments, maybe. Never repeats the same line twice in a row."""
+    lines = QUIPS[key]
+    if FLAVOR.random() >= chance:
+        return
+    options = [l for l in lines if l != _last_quip.get(key)] or lines
+    line = FLAVOR.choice(options)
+    _last_quip[key] = line
+    croak(style, line, **kw)
+
+
+def croak(style, text, **kw):
+    print("  " + style.accent(fx("🎩 {name}:")) + " " + fx(text, **kw))
+
+
+def bet_quip(style, bet, chips, free):
+    """React to a fresh bet. `free` is what the player had left before it."""
+    n = len(bet["numbers"])
+    kw = {"label": bet["label"], "stake": bet["stake"]}
+    if bet["stake"] >= free and bet["stake"] > 1:
+        say(style, "all_in", **kw)
+    elif chips and bet["stake"] * 2 >= chips and bet["stake"] > 1:
+        say(style, "big", **kw)
+    elif bet["numbers"] == {0}:
+        say(style, "zero", 0.7, **kw)
+    elif n == 1:
+        say(style, "straight", 0.7, **kw)
+    elif n == 18:
+        say(style, "even", 0.5, **kw)
+    elif n == 12:
+        say(style, "outside2", 0.5, **kw)
+    else:
+        say(style, "inside", 0.6, **kw)
+
+
+def ball_misbehaves(style, animate):
+    """Once in a while the ball escapes. Purely theatre: the result is unchanged."""
+    if FLAVOR.randrange(MISBEHAVE_ODDS):
+        return False
+    print()
+    print("  " + style.red("⚠  BALL ESCAPE  ⚠"))
+    for line in FLAVOR.choice(MISBEHAVIOURS):
+        print("  " + style.dim(fx(line)))
+        sys.stdout.flush()
+        if animate:
+            time.sleep(0.8)
+    return True
+
+
+def martingale_level(state, stake):
+    """How many times in a row the player has doubled their stake after a loss."""
+    if state["last_net"] < 0 and state["last_stake"] > 0 and stake >= 2 * state["last_stake"]:
+        return state["martingale"] + 1
+    return 0
+
+
+def martingale_quip(style, level, stake):
+    if level < 2:
+        return
+    unit = max(1, stake >> level)
+    text = MARTINGALE_QUIPS.get(level, MARTINGALE_MAX)
+    croak(style, text, stake=stake, unit=unit, level=level)
+
+
+# One burst, 5 rows x 11 columns, as it blooms and fades.
+FIREWORK_STAGES = [
+    ["", "", "     *     ", "", ""],
+    ["", "    \\|/    ", "   --*--   ", "    /|\\    ", ""],
+    ["  .  '  .  ", "   \\ | /   ", " ' - * - ' ", "   / | \\   ", "  '  .  '  "],
+    ["  .     .  ", " .       . ", "'         '", " .       . ", "  '     '  "],
+    ["     .     ", "  .     .  ", "           ", "  '     '  ", "     '     "],
+    ["", "", "", "", ""],
+]
+FIREWORK_COLORS = ("1;31", "1;33", "1;35", "1;36", "1;32", "1;97")
+
+
+def fireworks(style, animate, bursts=5):
+    """A tiny ASCII fireworks show for a straight-up hit."""
+    width = max(24, min(term_width(), 72) - 4)
+    rows = len(FIREWORK_STAGES[0])
+    shows = [(FLAVOR.randrange(0, width - 11), FLAVOR.randrange(0, 4),
+              FLAVOR.choice(FIREWORK_COLORS)) for _ in range(bursts)]
+
+    def frame(t):
+        grid = [[(" ", None)] * width for _ in range(rows)]
+        for x, start, color in shows:
+            stage = t - start
+            if not 0 <= stage < len(FIREWORK_STAGES):
+                continue
+            for r, line in enumerate(FIREWORK_STAGES[stage]):
+                for c, ch in enumerate(line):
+                    if ch != " ":
+                        grid[r][x + c] = (ch, color)
+        return ["  " + "".join(style._wrap(col, ch) if col else ch for ch, col in row)
+                for row in grid]
+
+    out = sys.stdout
+    if not animate:
+        print("\n".join(frame(2)))
+        return
+    total = len(FIREWORK_STAGES) + 4
+    out.write(HIDE_CURSOR)
+    try:
+        for t in range(total):
+            if t:
+                out.write(f"\033[{rows}A")
+            out.write("\r" + "\n".join(l + CLEAR_LINE for l in frame(t)) + "\n")
+            out.flush()
+            time.sleep(0.11)
+        out.write(f"\033[{rows}A\033[J")
+    finally:
+        out.write(SHOW_CURSOR)
+        out.flush()
+
+
+def tip_croupier(style, state, amount, free=None):
+    """Slip the croupier some chips. Recent tips buy help on losing spins.
+
+    Tipping 0 is allowed. The croupier is offended, and your luck goes down.
+    """
+    free = state["chips"] if free is None else free
+    # Can you even afford it? Checked first, so a broke player hears about the
+    # empty pockets rather than getting a lecture on honesty.
+    if amount < 0:
+        croak(style, "A negative tip? {name} is not falling for that one again.")
+        return False
+    if amount > 0 and free <= 0:
+        croak(style, "You can't tip with no chips. {name} appreciates the thought, though.")
+        return False
+    if amount > free:
+        croak(style, "You only have {free} 🪙 to tip with. {name} admires the ambition.",
+              free=free)
+        return False
+    if state["honest"] and amount > 0:
+        say(style, "honest_tip")
+        return False
+    if amount == 0:
+        say(style, "tip_zero")
+        state["tip_pending"] += ZERO_TIP_PENALTY
+        clamp_tips(state)
+        print("  " + style.red(luck_text(state)))
+        save_state(state)
+        return True
+    was_maxed = help_chance(state) >= HELP_MAX
+    state["chips"] -= amount
+    state["tips"] += amount
+    state["run_tipped"] += amount
+    state["tip_pending"] += amount
+    clamp_tips(state)
+    if was_maxed:
+        say(style, "help_maxed")
+    else:
+        key = "tip_everything" if state["chips"] <= 0 else \
+            [k for threshold, k in TIP_TIERS if amount >= threshold][-1]
+        say(style, key, amount=amount)
+    print("  " + style.green(luck_text(state)))
+    save_state(state)
+    return True
+
+
+def swap_table(style, state):
+    """Move to another table, with a different croupier. Your luck doesn't transfer.
+
+    Right after a pit-boss bust you're not allowed to move for a while
+    (state["heat"] spins), so swapping can't instantly undo getting caught.
+    """
+    if state["heat"] > 0:
+        croak(style, "\"The pit boss wants you right where you are,\" says {name}. "
+                     "({n} more spin{s} before you can change tables)",
+              n=state["heat"], s="s" if state["heat"] != 1 else "")
+        return False
+    print("  " + style.dim(fx("You gather your chips and wave goodbye to {name}.")))
+    print("  " + style.dim("🚶 You move to another table…"))
+    replace_dealer(state)
+    state["honest"] = 0
+    state["tip_log"], state["tip_pending"] = [], 0
+    save_state(state)
+    croak(style, "Good evening. I'm {name}, and I'll be your croupier this run.")
+    print("  " + style.dim(luck_text(state) + " — a fresh start"))
+    if state["run_caught"]:
+        print("  " + style.red(f"👀 The pit boss follows you over. Rigged spins are still "
+                               f"{2 ** state['run_caught']}× likelier to be spotted this run."))
+    return True
+
+
+def result_quip(style, state, results, net, mart_level, chips_before, mood=""):
+    """React to the spin. `mood` is "friend" (you've been tipping), "spite"
+    (you insulted them with 0 tips) or "" (neutral, with a little resentment)."""
+    def react(key, chance=1.0, **kw):
+        say(style, f"{key}_{mood}" if f"{key}_{mood}" in QUIPS else key, chance, **kw)
+
+    stake = sum(b["stake"] for b, _, _ in results)
+    if state is not None and state["chips"] <= 0:
+        if mart_level >= 2:
+            croak(style, MARTINGALE_BUST)
+        else:
+            react("broke")
+    elif net > 0 and mart_level >= 2:
+        croak(style, MARTINGALE_PAYOFF, net=net)
+    elif net > 0 and net >= max(50, stake * 5):
+        react("big_win", net=net)
+    elif net > 0:
+        react("win", 0.6, net=net)
+    elif net == 0:
+        react("push", 0.8)
+    elif -net >= max(50, chips_before // 2):
+        react("big_loss", lost=-net)
+    else:
+        react("lose", 0.5)
+
+
+def play_round(style, bets, *, animate, dry_run=False, state=None):
+    """Spin once, settle `bets`, print everything. Returns the net result."""
+    first, second = throw_ball()
+    results = settle_round(bets, first, second)
+    stake = sum(b["stake"] for b in bets)
+    live = state is not None and not dry_run and bool(bets)
+    chips_before = state["chips"] if state is not None else 0
+    mart = martingale_level(state, stake) if live else 0
+    sulking = live and spite_chance(state) > 0
+    mood = "friend" if (live and luck(state) > 0) else "spite" if sulking else ""
+    on_the_take = live and help_chance(state) > 0
+    rig = None
+    if live:
+        first, second, results, rig = try_rig(state, bets, first, second, results)
+    old_dealer = dict(DEALER)
+    pocket_lost = round(max(0, recent_tips(state))) if (rig and rig["caught"]) else 0
+
+    # The ball is thrown: settle and save BEFORE the show, so cancelling the
+    # animation can't dodge a loss (or a win).
+    if live:
+        net = apply_round(state, bets, first, second, results)
+        state["martingale"], state["last_stake"], state["last_net"] = mart, stake, net
+        log_spin_tips(state)
+        state["heat"] = max(0, state["heat"] - 1)
+        if rig and rig["caught"]:
+            state["caught"] += 1
+            state["run_caught"] += 1
+            state["tip_log"], state["tip_pending"] = [], 0
+            state["honest"] = 1
+            state["heat"] = PIT_BOSS_WATCH
+            replace_dealer(state)
+        elif rig and not rig["spite"]:
+            state["rigs"] += 1
+            state["run_rigs"] += 1
+        won_run = state["chips"] >= GOAL
+        if won_run:
+            finished = dict(state)
+            start_new_run(state)
+        save_state(state)
+    else:
+        net = sum(p for _, _, p in results)
+
+    print()
+    martingale_quip(style, mart, stake)
+    shown = finished if (live and won_run) else state  # show the winning balance
+    new_dealer = dict(DEALER)
+    set_dealer(old_dealer)  # the show stars the croupier who threw this ball
+    if sulking:
+        say(style, "sulk", 0.6)
+    elif on_the_take:
+        say(style, "accomplice", 0.6)
+    elif live and state["honest"] and not (rig and rig["caught"]):
+        say(style, "honest", 0.4)
+    if animate:
+        print(style.dim("  no more bets… the ball is rolling"))
+    if ball_misbehaves(style, animate) and animate:
+        print(style.dim("  …the ball is rolling (again)"))
+    if animate:
+        wheel_spin(style, WHEEL_ORDER, first)
+    announce(style, first)
+
+    if first == 0:
+        print()
+        print("  " + style.accent("✨✨  Z E R O  —  S U P E R   S P I N  ✨✨"))
+        say(style, "zero_spin", 0.8)
+        zero_hits = [(b, p) for b, w, p in results if 0 in b["numbers"]]
+        for b, p in zero_hits:
+            print("  " + style.green(f"✅ {b['label']} hits — pays 36:1  (+{p} 🪙)"))
+        if animate:
+            _flash_felt(style)
+        print(style.dim("  the zero vanishes — every other bet rides a re-spin on 1–36"))
+        if animate:
+            wheel_spin(style, SUPER_WHEEL_ORDER, second, frames=48)
+        announce(style, second, prefix="✨")
+
+    if rig and rig["spite"]:
+        say(style, "spite")
+        print("  " + style.red(fx("🍀 spoiled by {name}")))
+    elif rig and not rig["caught"]:
+        say(style, "rigged")
+        print("  " + style.green(fx("🍀 rigged by {name}")))
+    if rig and rig["caught"]:
+        pit_boss(style, animate, pocket_lost, state["run_caught"])
+
+    straights = [b for b, won, _ in results if won and len(b["numbers"]) == 1]
+    if straights:
+        print()
+        fireworks(style, animate)
+        for b in straights:
+            print("  " + style.bright(f"🎆  STRAIGHT UP!  {b['label']} pays {b['payout']}:1  🎆"))
+
+    if bets:
+        print()
+        print("  " + style.accent("━━ PAYOUTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+        for b, won, p in results:
+            mark = "✅" if won else "❌"
+            amount = style.green(f"+{p}") if won else style.red(f"{p}")
+            odds = style.dim(f"{str(b['payout']) + ':1':<5}")
+            print(f"  {mark} {b['label']:<18} {b['stake']:>6} 🪙  {odds}  →  {amount}")
+        net_s = (style.green(f"+{net}") if net > 0 else
+                 style.red(str(net)) if net < 0 else style.dim("±0"))
+        line = f"  net {net_s} 🪙"
+        if state is not None:
+            line += "    →    balance " + style.bright(f"{shown['chips']} 🪙")
+            if net > 0 and shown["streak"] >= 2:
+                line += style.bright(f"   🔥 streak x{shown['streak']}")
+        print(line)
+        if not rig:  # rigged, spoiled and busted spins already had their own lines
+            result_quip(style, shown if live else None, results, net, mart, chips_before, mood)
+        if dry_run:
+            print(style.dim("  (dry run — no chips moved)"))
+        elif state is not None and state["chips"] <= 0:
+            print(style.dim("  Out of chips — beg for more: roulette --beg"))
+
+    set_dealer(new_dealer)
+    if rig and rig["caught"]:
+        print()
+        croak(style, "{name} takes over the table. {He} is honest, and {he} is watching you.")
+    if live and won_run:
+        victory(style, finished, old_dealer, animate)
+    return net
+
+
+def start_new_run(state):
+    """Bank broken: record it, restock the table, bring in a fresh croupier."""
+    state["banks_broken"] += 1
+    if not state["best_run"] or state["run_spins"] < state["best_run"]:
+        state["best_run"] = state["run_spins"]
+    state["run"] += 1
+    state["chips"] = STARTING_CHIPS
+    for k in ("run_spins", "run_begs", "run_tipped", "run_rigs", "run_caught", "tip_pending",
+              "honest", "heat",
+              "martingale", "last_stake", "last_net"):
+        state[k] = 0
+    state["tip_log"] = []
+    replace_dealer(state)
+
+
+def pit_boss(style, animate, pocket_lost, busts=1):
+    print()
+    print("  " + style.red("🚨  C A U G H T  🚨"))
+    for line in FLAVOR.choice(PIT_BOSS_SCENES):
+        print("  " + style.red(fx(line)))
+        sys.stdout.flush()
+        if animate:
+            time.sleep(0.8)
+    print("  " + style.dim(fx("{name} is escorted out, along with your {pocket} 🪙 of recent tips.",
+                              pocket=pocket_lost)))
+    print("  " + style.red(f"👀 The pit boss knows your face now: rigged spins are "
+                           f"{2 ** busts}× likelier to be spotted for the rest of this run."))
+
+
+def victory(style, run, accomplice, animate):
+    """The run is won: you broke the bank."""
+    print()
+    fireworks(style, animate, bursts=8)
+    print("  " + style.bright("🏦💥  Y O U   B R O K E   T H E   B A N K  💥🏦"))
+    bits = [f"run #{run['run']}", f"{run['run_spins']} spins",
+            f"{run['run_begs']} beg{'s' if run['run_begs'] != 1 else ''}"]
+    if run["run_tipped"]:
+        bits.append(f"{run['run_tipped']} 🪙 in bribes")
+    if run["run_rigs"]:
+        bits.append(f"{run['run_rigs']} rigged spin{'s' if run['run_rigs'] != 1 else ''}")
+    print("  " + style.dim("  ·  ".join(bits)))
+    if run["run_rigs"] and not run["honest"]:
+        saved = dict(DEALER)
+        set_dealer(accomplice)
+        say(style, "victory")
+        set_dealer(saved)
+    elif run["run_begs"]:
+        print("  " + style.dim("From the beg wall to the vault. Inspirational."))
+    print()
+    print(style.dim(f"  The house restocks the table. Run #{run['run'] + 1} starts with "
+                    f"{STARTING_CHIPS} 🪙."))
+    croak(style, "Good evening. I'm {name}, and I'll be your croupier this run.")
+
+
+INTERACTIVE_HELP_TEMPLATE = """\
+  place a bet:   <target> <chips> or <chips> <target>   e.g.  red 10   10 red   d2 20
+                 numbers too: 2 90 or 90 2 — if it's unclear, say  5 on 17
+                 'all' bets everything you have left, e.g.  black all
+  spin           spin the wheel (or just press Enter; with no bets it's a free spin)
+  rebet          put your last bets back on the table
+  bets / undo / clear      show, take back the last, or pick up all your chips
+  table          show the felt and every payout
+  stats          bankroll and record                   history   recent numbers
+  tip [chips]    slip the croupier some chips. Each chip is 🍀 +{per}% luck (max
+                 {maxp}%): the chance they rig a losing spin your way. It fades
+                 a little every spin and is gone after {window}. Tip 0 and
+                 your luck goes DOWN. Get
+                 caught by the pit boss and you lose the bet, and an honest
+                 croupier takes over.
+  swap_table     move to another table with a new croupier (luck resets to 0)
+  quit           leave the table
+  beg            go broke and you can beg the house for 100 more"""
+
+
+INTERACTIVE_HELP = INTERACTIVE_HELP_TEMPLATE.format(
+    window=TIP_WINDOW, per=f"{HELP_PER_CHIP * 100:g}", maxp=int(HELP_MAX * 100))
+
+BET_USAGE = "bet as  <target> <chips>  or  <chips> <target>,  e.g.  red 10   10 red   5 on 17"
+
+
+def _parse_bet_line(line, available):
+    """Read a bet in either order: 'black 90', '90 black', '2 90', '90 2', '90 on 2'.
+
+    When both words are numbers, whichever reading is a legal bet wins
+    ('90 2' can only mean 90 chips on 2). If both readings are legal
+    ('5 17'), ask the player to say '5 on 17' instead of guessing.
+    """
+    toks = line.split()
+    lowered = [t.lower() for t in toks]
+    if "on" in lowered[1:-1]:
+        i = lowered.index("on", 1)
+        readings = [(" ".join(toks[:i]), " ".join(toks[i + 1:]))]
+    elif len(toks) >= 2:
+        readings = [(toks[-1], " ".join(toks[:-1])), (toks[0], " ".join(toks[1:]))]
+    else:
+        raise ValueError(BET_USAGE)
+
+    def build(stake_tok, target):
+        if stake_tok.lower() in ("all", "max"):
+            stake = available
+        else:
+            try:
+                stake = int(stake_tok)
+            except ValueError:
+                raise ValueError(BET_USAGE) from None
+        bet = parse_target(target)
+        if stake <= 0:
+            raise ValueError("you have nothing left to bet — try 'beg'" if available <= 0
+                             else "a bet must be at least 1 chip")
+        if stake > available:
+            raise ValueError(f"you only have {available} 🪙 left to bet")
+        bet["stake"] = stake
+        return bet
+
+    found, errors = [], []
+    for stake_tok, target in readings:
+        try:
+            found.append(build(stake_tok, target))
+        except ValueError as exc:
+            errors.append(exc)
+    if len(found) == 2 and found[0]["key"] != found[1]["key"]:
+        x, y = found
+        raise ValueError(f"'{line}' could go either way — say '{x['stake']} on {x['label']}'"
+                         f" or '{y['stake']} on {y['label']}'")
+    if found:
+        return found[0]
+    # Prefer a specific complaint (not enough chips, illegal bet) over usage.
+    specific = [e for e in errors if str(e) != BET_USAGE]
+    raise (specific[0] if specific else errors[0])
+
+
+def _add_bet(bets, bet):
+    for b in bets:
+        if b["key"] == bet["key"]:
+            b["stake"] += bet["stake"]
+            return
+    bets.append(bet)
+
+
+def interactive(style, *, animate=True):
+    state = load_state()
+    bets, last = [], []
+    print()
+    print(style.accent("        🎰  R O U L E T T E  🎰"))
+    print(style.dim("        a fair table — the house has no edge"))
+    if state["chips"] <= 0:
+        print(style.red("        you're flat broke"))
+    else:
+        print(style.dim(f"        you have {state['chips']} 🪙"))
+    print(style.dim(f"        goal: break the bank at {GOAL:,} 🪙  ·  run #{state['run']}"))
+    if state["honest"]:
+        print(style.dim(fx("        🎩 {name} is your croupier — honest, and watching you")))
+    else:
+        print(style.dim(fx("        🎩 {name} is your croupier this run "
+                           "({he} accepts tips… and favours)")))
+    print_table(style)
+    print()
+    print(INTERACTIVE_HELP)
+
+    while True:
+        on_table = sum(b["stake"] for b in bets)
+        free = state["chips"] - on_table
+        print()
+        prompt = (f"  [{state['chips']}/{GOAL:,} 🪙"
+                  + (f" · {luck_text(state)}" if luck(state) else "")
+                  + (f" · {on_table} on the table" if on_table else "") + "] bet> ")
+        try:
+            line = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            line = "quit"
+        cmd = line.lower()
+
+        if cmd in ("q", "quit", "exit", "leave"):
+            print(style.dim(f"  You leave the table with {state['chips']} 🪙. "
+                            "Come back any time."))
+            return 0
+        if cmd in ("h", "help", "?"):
+            print(INTERACTIVE_HELP)
+            continue
+        if cmd in ("t", "table"):
+            print_table(style)
+            continue
+        if cmd == "history":
+            hist = format_history(style, state["history"], HISTORY_LEN)
+            print("  " + (hist or style.dim("no spins yet")))
+            continue
+        if cmd == "stats":
+            show_stats(style)
+            continue
+        if cmd == "beg":
+            beg(style)
+            state = load_state()
+            continue
+        if cmd in ("swap_table", "swap table", "swaptable",
+                   "swap_tables", "swap tables", "swaptables"):
+            swap_table(style, state)
+            continue
+        if cmd == "tip" or cmd.startswith("tip "):
+            arg = cmd[3:].strip() or "1"
+            try:
+                amount = free if arg in ("all", "max") else int(arg)
+            except ValueError:
+                print(style.red("  tip as  tip <chips>,  e.g.  tip 5"))
+                continue
+            tip_croupier(style, state, amount, free)
+            continue
+        if cmd in ("b", "bets"):
+            if not bets:
+                print(style.dim("  no bets on the table"))
+            for b in bets:
+                print(f"  • {b['label']:<18} {b['stake']:>6} 🪙  pays {b['payout']}:1")
+            continue
+        if cmd in ("u", "undo"):
+            if bets:
+                b = bets.pop()
+                print(style.dim(f"  picked up {b['stake']} 🪙 from {b['label']}"))
+            continue
+        if cmd in ("c", "clear"):
+            bets = []
+            print(style.dim("  you pick up your chips"))
+            continue
+        if cmd in ("r", "rebet", "again"):
+            if not last:
+                print(style.dim("  nothing to repeat yet — place a bet first, e.g.  red 10"))
+                continue
+            if sum(b["stake"] for b in last) > free:
+                print(style.dim("  not enough chips to repeat your last bets"))
+                continue
+            for b in last:
+                _add_bet(bets, dict(b))
+            print(style.dim("  re-betting: " + ", ".join(
+                f"{b['stake']} on {b['label']}" for b in last) + "  (Enter to spin)"))
+            continue
+        if cmd in ("", "s", "spin", "go"):
+            if not bets:
+                # A free spin: just watch the wheel. No chips, stats or history.
+                play_round(style, [], animate=animate, dry_run=True)
+                print(style.dim("  (free spin — no bets on the table, no chips moved)"))
+                continue
+            play_round(style, bets, animate=animate, state=state)
+            last, bets = [dict(b) for b in bets], []
+            hist = format_history(style, state["history"])
+            if hist:
+                print(style.dim("  recent: ") + hist)
+            continue
+        try:
+            bet = _parse_bet_line(line, free)
+        except ValueError as exc:
+            print(style.red(f"  {exc}"))
+            continue
+        _add_bet(bets, bet)
+        print(style.dim(f"  {bet['stake']} 🪙 on {bet['label']} (pays {bet['payout']}:1)"))
+        bet_quip(style, bet, state["chips"], free)
 
 
 # ---------------------------------------------------------------------------
@@ -843,29 +2451,38 @@ def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
 def build_parser():
     p = argparse.ArgumentParser(
         prog="roulette",
-        description="Spin a wheel of harmless, read-only commands and run the winner.",
+        description="A zero-edge roulette table in your terminal. "
+                    "Use --commands (or --russian) for the wheel of harmless commands.",
+    )
+    mode = p.add_argument_group("modes")
+    mode.add_argument(
+        "--commands", action="store_true",
+        help="spin the wheel of harmless, read-only shell commands and run the winner",
+    )
+    mode.add_argument(
+        "--russian", action="store_true",
+        help="command wheel plus a 'russian roulette' slot that trashes every file "
+             "and folder in the current directory (opt-in; asks before deleting)",
+    )
+    mode.add_argument(
+        "--table", action="store_true",
+        help="show the roulette table and every payout, then exit",
     )
     p.add_argument(
         "-n", "--dry-run", action="store_true",
-        help="spin and pick a command, but do not execute it",
+        help="spin, but don't move chips (or, in command mode, run anything)",
     )
     p.add_argument(
         "-l", "--list", action="store_true",
-        help="list every command on the wheel and exit",
+        help="list every command on the command wheel and exit",
     )
     p.add_argument(
         "-p", "--pick", "-f", "--fast", action="store_true", dest="pick",
-        help="skip the spin animation and run the winner immediately",
+        help="skip the spin animation",
     )
     p.add_argument(
         "--keep-wheel", action="store_true",
-        help="keep the full wheel on screen after it lands "
-             "(default: collapse it once the spin stops)",
-    )
-    p.add_argument(
-        "--russian", action="store_true",
-        help="add a 'russian roulette' slot that trashes every file and folder "
-             "in the current directory (opt-in; asks before deleting)",
+        help="command mode: keep the full wheel on screen after it lands",
     )
     p.add_argument(
         "--no-color", action="store_true",
@@ -873,7 +2490,7 @@ def build_parser():
     )
     p.add_argument(
         "--timeout", type=int, default=15, metavar="SECS",
-        help="seconds to allow the winning command to run (default: 15)",
+        help="command mode: seconds to allow the winning command to run (default: 15)",
     )
     p.add_argument(
         "--seed", type=int, default=None,
@@ -882,11 +2499,23 @@ def build_parser():
     bet = p.add_argument_group("betting (persistent bankroll in ~/.roulette)")
     bet.add_argument(
         "--bet", type=int, default=None, metavar="CHIPS",
-        help="wager CHIPS on the spin; the pocket you land on settles the bet",
+        help="wager CHIPS on a single spin instead of sitting down at the table",
     )
     bet.add_argument(
-        "--on", choices=BET_TARGETS, default="red", metavar="TARGET",
-        help="what to bet on: red, black, green (the losers), or jackpot",
+        "--on", default="red", metavar="TARGET",
+        help="what to bet on: red, black, odd, even, low, high, d1-d3, col1-col3, "
+             "0-36, splits like 17/18, streets like 7-9 ... "
+             "(command mode: red, black, green or jackpot)",
+    )
+    bet.add_argument(
+        "--swap-table", action="store_true",
+        help="move to another table with a new croupier (your luck starts over at 0)",
+    )
+    bet.add_argument(
+        "--tip", type=int, default=None, metavar="CHIPS",
+        help=f"tip the croupier; each chip is +{HELP_PER_CHIP * 100:g}%% luck (max "
+             f"{HELP_MAX * 100:.0f}%%) that a losing spin gets rigged your way, fading "
+             f"over {TIP_WINDOW} spins, until the pit boss catches you",
     )
     bet.add_argument(
         "--stats", action="store_true",
@@ -907,25 +2536,58 @@ def build_parser():
     return p
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def _check_bankroll(bet):
+    """Return an error message if `bet` chips can't be wagered, else None."""
+    if bet <= 0:
+        return "Your bet must be a positive number of chips."
+    state = load_state()
+    if bet > state["chips"]:
+        if state["chips"] <= 0:
+            return "You're flat broke. Beg for a comeback: roulette --beg"
+        return (f"Not enough chips: you have {state['chips']} 🪙 "
+                f"(try --bet {state['chips']}, or beg: roulette --beg).")
+    return None
 
-    use_color = not args.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
-    style = Style(use_color)
 
-    # Bankroll management commands (no spin).
-    if args.reset:
-        save_state(dict(DEFAULT_STATE))
-        print(f"Bankroll reset to {STARTING_CHIPS} 🪙.")
+def casino_main(args, style):
+    """The real, zero-edge roulette table."""
+    if args.table:
+        print_table(style)
         return 0
-    if args.stats:
-        return show_stats(style)
-    if args.beg:
-        return beg(style)
 
-    if args.seed is not None:
-        random.seed(args.seed)
+    interactive_ok = sys.stdin.isatty() and sys.stdout.isatty()
+    animate = sys.stdout.isatty() and not args.pick
 
+    if args.bet is None:
+        if interactive_ok and not args.dry_run:
+            return interactive(style, animate=animate)
+        # Non-interactive (or a dry run) with no bet: just spin the wheel.
+        play_round(style, [], animate=animate, dry_run=True)
+        return 0
+
+    try:
+        bet = parse_target(args.on)
+    except ValueError as exc:
+        print(f"roulette: {exc}", file=sys.stderr)
+        print(BET_HELP, file=sys.stderr)
+        return 2
+    if not args.dry_run:
+        err = _check_bankroll(args.bet)
+        if err:
+            print(err, file=sys.stderr)
+            return 2
+    bet["stake"] = args.bet
+    state = load_state()
+    print()
+    print(style.accent("        🎰  R O U L E T T E  🎰"))
+    print(style.dim(f"     {args.bet} 🪙 on {bet['label']} (pays {bet['payout']}:1)"
+                    f"  —  balance {state['chips']} 🪙"))
+    play_round(style, [bet], animate=animate, dry_run=args.dry_run, state=state)
+    return 0
+
+
+def commands_main(args, style):
+    """The original wheel of harmless commands (plus the optional russian slot)."""
     wheel = list(COMMANDS)
     if args.russian:
         wheel.append(RUSSIAN)
@@ -935,26 +2597,21 @@ def main(argv=None):
             print(f"{i:3d}. {cmd}")
         return 0
 
-    # Betting setup / validation.
     betting = args.bet is not None
     state = None
     if betting:
         if args.russian:
             print("Cannot combine --bet with --russian.", file=sys.stderr)
             return 2
-        if args.bet <= 0:
-            print("Your bet must be a positive number of chips.", file=sys.stderr)
+        if args.on not in BET_TARGETS:
+            print(f"In command mode, bet --on one of: {', '.join(BET_TARGETS)}.",
+                  file=sys.stderr)
+            return 2
+        err = _check_bankroll(args.bet)
+        if err:
+            print(err, file=sys.stderr)
             return 2
         state = load_state()
-        if args.bet > state["chips"]:
-            if state["chips"] <= 0:
-                print("You're flat broke. Beg for a comeback: roulette --beg",
-                      file=sys.stderr)
-            else:
-                print(f"Not enough chips: you have {state['chips']} 🪙 "
-                      f"(try --bet {state['chips']}, or beg: roulette --beg).",
-                      file=sys.stderr)
-            return 2
 
     is_tty = sys.stdout.isatty()
 
@@ -974,7 +2631,6 @@ def main(argv=None):
         if args.pick or not is_tty:
             winner = random.choice(wheel)
             if not is_tty:
-                # Non-interactive: don't animate, just report.
                 print(f"Picked: {winner}")
         else:
             winner = spin(wheel, style, keep_wheel=args.keep_wheel, color_of=slot_color)
@@ -993,9 +2649,11 @@ def main(argv=None):
             return 0
         print(style.green("  🎯 Would run:"), style.bright(winner))
         if betting:
-            won, _ = resolve_bet(args.on, winner)
-            print(style.dim(f"  (dry run — bet on {args.on} would "
-                            f"{'WIN' if won else 'LOSE'}; no chips moved)"))
+            if args.on in ("red", "black") and slot_color(winner) == "green":
+                verdict = "get a SECOND CHANCE super spin"
+            else:
+                verdict = "WIN" if resolve_bet(args.on, winner)[0] else "LOSE"
+            print(style.dim(f"  (dry run — bet on {args.on} would {verdict}; no chips moved)"))
         else:
             print(style.dim("  (dry run — nothing executed)"))
         return 0
@@ -1007,6 +2665,18 @@ def main(argv=None):
                           target=args.on, timeout=args.timeout)
 
     if betting:
+        # A green "house" pocket is like a 0: red/black bets aren't lost, they
+        # get a second-chance super spin (no house edge on even money).
+        if args.on in ("red", "black") and slot_color(winner) == "green":
+            print()
+            print("  " + style.slot("green", "GREEN house pocket")
+                  + style.dim(" — but there's no house edge here…"))
+            run_command(winner, style, args.timeout,
+                        header="  🎯 Your spin landed on:", header_color="accent")
+            label_, cmd_ = random.choice(SUPER_SLOTS)
+            return super_spin(style, "✨ SUPER SPIN — second chance (" +
+                              label_.split("— ", 1)[-1] + ")", cmd_,
+                              bet=args.bet, target=args.on, timeout=args.timeout)
         # Verdict first (the money), then the command as a clearly-labeled bonus
         # so its flavor output can't be read as the win/lose result.
         settle_bet(style, winner, args.bet, args.on)
@@ -1015,6 +2685,42 @@ def main(argv=None):
             header="  🎯 Your spin landed on:", header_color="accent",
         )
     return run_command(winner, style, args.timeout)
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+
+    use_color = not args.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    style = Style(use_color)
+
+    # Bankroll management commands (no spin).
+    if args.reset:
+        save_state(fresh_state())
+        ensure_dealer(load_state())
+        print(f"Bankroll reset to {STARTING_CHIPS} 🪙.")
+        return 0
+    ensure_dealer(load_state())
+    if args.stats:
+        return show_stats(style)
+    if args.beg:
+        return beg(style)
+    if args.swap_table:
+        print()
+        ok = swap_table(style, load_state())
+        if args.bet is None and args.tip is None:
+            return 0 if ok else 1
+    if args.tip is not None:
+        print()
+        ok = tip_croupier(style, load_state(), args.tip)
+        if args.bet is None:
+            return 0 if ok else 1
+
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    if args.commands or args.russian or args.list:
+        return commands_main(args, style)
+    return casino_main(args, style)
 
 
 if __name__ == "__main__":

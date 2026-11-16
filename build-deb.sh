@@ -28,11 +28,14 @@ Architecture: all
 Depends: python3 (>= 3.6), bash
 Recommends: util-linux, procps, coreutils
 Maintainer: Roulette Maintainer <sourcecodeholdings@protonmail.com>
-Description: terminal roulette wheel of harmless read-only commands
- roulette spins a reel of shell commands past a pointer, slows to a stop,
- and runs whichever command it lands on. Every command on the wheel is
- read-only and non-destructive (listing files, showing the date, reporting
- disk usage, and so on), so a spin can never harm your system.
+Description: zero-edge roulette table for the terminal
+ roulette is a real single-zero roulette table in your terminal, with no
+ house edge: landing on 0 pays bets on 0 at 36:1 and sends every other bet
+ to a re-spin. Start a run with 100 chips and try to break the bank at 1000,
+ with a bribable croupier, a watchful pit boss and plenty of jokes.
+ .
+ roulette --commands spins the original wheel of harmless, read-only shell
+ commands and runs the winner.
 EOF
 
 mkdir -p dist
