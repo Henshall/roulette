@@ -1,0 +1,47 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python version
+        run: python3 --version
+
+      - name: make check
+        run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          make check
+
+      - name: Every mode runs
+        run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          ./roulette --spin --no-color
+          ./roulette --bet 10 --on red --tip 1 --no-color
+          ./roulette --stats
+          ./roulette --pray
+          ./roulette --table >/dev/null
+          ./roulette --list >/dev/null
+          ./roulette --command --dry-run --pick
+          ./roulette --russian --dry-run --pick
+          ./roulette --beg
+
+      - name: Interactive table in a pseudo-terminal
+        run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          python3 .github/workflows/pty_smoke.py
+
+      - name: Install with make
+        run: |
+          sudo make install
+          roulette --version
+          man -w roulette

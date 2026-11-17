@@ -256,9 +256,11 @@ Preview the odds without risk: `roulette --russian --dry-run`.
 
 ## Install
 
-Two ways: install the prebuilt **`.deb`**, or build **from source**. roulette is
-a single Python 3 script with no third-party dependencies — just `python3` and
-`bash`, which ship with every Linux distro.
+Three ways: the prebuilt **`.deb`** (Debian/Ubuntu), **Homebrew** (macOS), or
+**from source** (anywhere). roulette is a single Python 3 script (3.6 or newer)
+with no third-party dependencies, just `python3` and `bash`, which ship with
+every Linux distro and with Apple's Command Line Tools on macOS. Every change is
+tested on both Linux and macOS.
 
 ### 1. Debian / Ubuntu package (`.deb`)
 
@@ -288,7 +290,17 @@ Or with the full Debian toolchain:
 `../roulette_2.5.0_all.deb`).
 </details>
 
-### 2. From source
+### 2. macOS (Homebrew)
+
+```bash
+brew install henshall/tap/roulette
+```
+
+Upgrade with `brew upgrade roulette`, remove with `brew uninstall roulette`.
+It runs on the `python3` that comes with Apple's Command Line Tools (Homebrew
+already needs those). Without Homebrew, use the from-source install below.
+
+### 3. From source
 
 Works on **Linux and macOS** (the `.deb` above is Debian/Ubuntu only):
 
