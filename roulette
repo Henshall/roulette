@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -283,7 +283,7 @@ DEFAULT_STATE = {
     "tip_log": [], "tip_pending": 0,
     "honest": 0, "croupier": "", "banks_broken": 0, "best_run": 0,
     "rigs": 0, "caught": 0, "run_rigs": 0, "run_caught": 0, "heat": 0,
-    "prayers": 0, "pray_streak": 0, "kicked_out": 0,
+    "prayers": 0, "pray_streak": 0, "kicked_out": 0, "events_seen": [],
     "martingale": 0, "last_stake": 0, "last_net": 0,
 }
 
@@ -427,6 +427,7 @@ def fresh_state():
     state = dict(DEFAULT_STATE)
     state["history"] = []
     state["tip_log"] = []
+    state["events_seen"] = []
     return state
 
 
@@ -2004,6 +2005,344 @@ def ball_misbehaves(style, animate):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Table talk: near misses, tiny-bet bribery, patterns, rare events, exits.
+# All cosmetic: none of this changes a single result.
+# ---------------------------------------------------------------------------
+SMALL_BET = 20          # bribing the croupier on bets under this is a bit silly
+RARE_EVENT_ODDS = 50    # 1 spin in N, something happens elsewhere in the casino
+
+QUIPS.update({
+    # The ball lands right next to one of your numbers on the wheel.
+    "near_miss": [
+        "{landed}. Right next door to your {mine}. The ball waved at it on the way past.",
+        "One pocket. ONE. The ball touched {mine}, thought about it, and moved in next door.",
+        "\"{landed},\" winces {name}. \"Your {mine} was right there. I could have reached it with a breadstick.\"",
+        "One pocket from {mine}. It's not a loss, it's a near-win. It's also a loss.",
+        "{landed}, the next-door neighbour of {mine}. The ball is a tease and everyone here knows it.",
+        "So close to {mine} that {name} checks the replay. Still {landed}. Still not yours.",
+        "\"{landed}! One off! In {lang}, we call that 'almost', which is also our word for 'no'.\"",
+        "The ball bounced off {mine} and settled on {landed}. It did that on purpose.",
+        "One pocket away. {name} offers you a tissue. It's a used tissue, but it's the thought.",
+        "{landed}. {mine} was RIGHT THERE. The ball heard you shouting and decided against it.",
+        "{name} holds {his} thumb and finger a millimetre apart. \"That close. To {mine}. Tragic.\"",
+    ],
+    # You're bribing the croupier, but your bets are tiny.
+    "tiny_bets": [
+        "\"You're bribing me to rig a {stake}-chip bet?\" hisses {name}. \"We'll get caught for pocket change.\"",
+        "{name} leans in: \"If I'm risking my job, could you at least bet like you mean it?\"",
+        "{name} glances at the pit boss, then at your {stake} 🪙. \"Is this worth prison to you? Because it isn't to me.\"",
+        "\"Tiny bets, long nights, and a pit boss with excellent eyesight,\" mutters {name}. \"Bet bigger, finish sooner.\"",
+        "{name} whispers: \"Every spin I cheat for you is a spin the pit boss watches. Make them count.\"",
+        "\"{stake} 🪙? I've found more than that down the back of the sofa,\" says {name}.",
+        "{name} sighs. \"We're running a heist and you're stealing paperclips.\"",
+        "\"At this rate we'll break the bank next Christmas,\" says {name}. \"From prison.\"",
+        "{name} taps your {stake} 🪙 and whispers, \"Go big or the pit boss sends us both home.\"",
+    ],
+    # The same number twice in a row.
+    "repeat_number": [
+        "{n} again! The wheel has a favourite and it isn't you.",
+        "{n}, twice in a row. {name} checks the wheel for chewing gum.",
+        "Back-to-back {n}. Somewhere, a statistician just fainted.",
+        "{n} again. The ball liked it so much it moved in.",
+        "{name} stares at {n}. {n} stares back. Neither of them blinks.",
+        "{n}, and then {n}. {name} quietly makes a note to have the wheel blessed.",
+    ],
+    # A long run of one colour.
+    "color_streak": [
+        "{count} {color}s in a row. The other colour has filed a missing-persons report.",
+        "That's {count} {color}s in a row. {name} has started humming to stay calm.",
+        "{count} straight {color}s. The wheel is going through a phase.",
+        "{count} {color}s. {name} polishes the other colour, just to remind it that it's allowed.",
+        "{count} {color}s in a row. People from the next table are coming over to watch.",
+        "{count} {color}s. {name} checks the wheel hasn't been repainted.",
+    ],
+    # The colours keep alternating.
+    "zigzag": [
+        "Red, black, red, black… {count} spins of perfect alternation. The wheel is doing a crossword.",
+        "{count} spins of alternating colours. It's a very tidy wheel.",
+        "The colours have alternated {count} times. The wheel is clearly trying to say something in Morse.",
+        "Red, black, red, black. {name} starts clicking {his} fingers in time.",
+        "{count} alternating spins. {name} considers selling the pattern as wallpaper.",
+    ],
+    # Betting against a streak because the other colour is "due".
+    "gamblers_fallacy": [
+        "{count} {streak}s in a row, so {color} is due? The wheel has no memory. Also no mercy.",
+        "\"Surely {color} is due,\" you think. The wheel doesn't think. That's sort of its whole thing.",
+        "{name}: \"Ah, the gambler's fallacy. My favourite fallacy. Very popular. Never works.\"",
+        "Betting {color} because {streak} has had a good run? The ball isn't into fairness. Well, it is. Exactly. That's the problem.",
+        "{name} nods wisely. \"Yes. {color} is due. Just like my rent.\"",
+        "\"After {count} {streak}s, {color} HAS to come up,\" you think. The wheel, legally, does not have to do anything.",
+    ],
+    # Betting with a streak.
+    "ride_streak": [
+        "{count} {streak}s and you're betting {streak} again. Riding the wave. Waves end.",
+        "Following the streak. Bold, or lazy. {name} genuinely can't tell.",
+        "\"The hot hand,\" whispers {name}. \"Also a fallacy, but the fun one.\"",
+        "Betting {streak} again, after {count} of them. Loyalty. {name} respects loyalty.",
+        "{name} raises an eyebrow. \"{count} {streak}s and you want more. Greedy. I like it.\"",
+    ],
+    # A straight-up bet on the number that just came up.
+    "chase_last": [
+        "Betting on {n} because it just came up? Lightning doesn't strike twice. Roulette balls sometimes do.",
+        "{n} again? You're asking the ball for an encore.",
+        "{name}: \"Chasing the last number. Classic. The ball has already moved on emotionally.\"",
+        "{n}, the number that just hit. {name} admires your commitment to the past.",
+        "{n}, again. {name} pats the number like a horse that just won a race and is now very tired.",
+    ],
+})
+
+# Something happens elsewhere in the casino. The deck is dealt without
+# repeats: you see all of these before any of them comes round again.
+RARE_EVENTS = [
+    ["A bachelor party sits down at the next table in matching T-shirts that say 'NO REGRETS'.",
+     "The groom loses his whole budget on one spin.",
+     "The T-shirts are now ironic."],
+    ["A seagull flies in through the front door. Nobody knows how. Nobody asks.",
+     "It lands on the felt, stares at {name}, and steals a cocktail napkin.",
+     "Security writes 'bird' on a form and goes back to sleep."],
+    ["The lights go out. In the dark, you can hear the wheel still spinning.",
+     "When the lights come back, {name} is in exactly the same pose, smiling.",
+     "Nobody mentions it."],
+    ["A tourist asks to photograph your losses for their holiday album.",
+     "{name} poses proudly beside your spot on the felt.",
+     "You will now appear in a slideshow in another country."],
+    ["A magician at the bar pulls a chip from behind your ear.",
+     "It's his chip. He takes it back.",
+     "\"The real magic,\" he says, \"is that you're still here.\""],
+    ["The fire alarm goes off. Nobody moves. It's a casino.",
+     "{name} keeps dealing.",
+     "Eventually, the alarm gives up first."],
+    ["A man in a gold tracksuit sits down, bets a small house on black, loses, and leaves whistling.",
+     "{name} doesn't even look up.",
+     "\"Tuesday,\" {he} explains."],
+    ["A sweet old lady at the next table hits three straight-up numbers in a row.",
+     "She looks at you, then at your chips, and slowly shakes her head.",
+     "She tips {name} more than you have all night."],
+    ["Someone at the bar proposes. The answer is \"let me finish this spin.\"",
+     "The spin loses.",
+     "The answer is now no."],
+    ["A mariachi band wanders through the casino. Nobody hired them.",
+     "They play one song at your table, in a minor key, while looking at you.",
+     "They leave without asking for a tip. That's how bad it is."],
+    ["A cleaner sweeps around your feet and finds 0 🪙.",
+     "\"Same as your pockets,\" she says, kindly.",
+     "She keeps the 0 🪙. Finders keepers."],
+    ["A man who looks exactly like a famous film star sits down beside you.",
+     "He isn't. He is, however, even worse at roulette than you.",
+     "You feel better. Briefly."],
+    ["A fortune teller at the bar reads your palm for free.",
+     "\"You will lose,\" she says. \"Then lose again. Then you will meet a man named Doug.\"",
+     "She refuses to elaborate."],
+    ["Across the room, a slot machine hits the jackpot. Bells, lights, confetti.",
+     "Everyone turns to look. {name} turns to look.",
+     "Your table feels very quiet now."],
+    ["A cat walks across the table, sits on 17 and refuses to move.",
+     "{name} gently relocates the cat to the bar.",
+     "The cat now has a better seat than you."],
+    ["An accountant at the next table explains zero-edge maths to anyone who will listen.",
+     "Nobody listens.",
+     "He wins anyway, which is somehow worse."],
+    ["The pit boss walks past, eating a sandwich.",
+     "{name} stands up very straight.",
+     "The sandwich is egg. The whole table can tell."],
+    ["A wedding party wanders in looking for the chapel. They're in the wrong building.",
+     "On her way out, the bride puts 20 🪙 on red. It wins.",
+     "Even people who got lost are luckier than you tonight."],
+    ["A cold breeze crosses the table and the chandelier flickers.",
+     "\"That's Gerald,\" says {name}. \"He bet on double zero in 1974. We don't have a double zero.\"",
+     "Gerald is still waiting."],
+    ["A tiny violinist sets up beside your chair.",
+     "\"The house sent me,\" he says, and plays the saddest song you've ever heard.",
+     "{name} sheds a single, professional tear."],
+]
+_events_seen = []  # used when there's no saved state (free spins, dry runs)
+
+# Leaving the table, by how the night went.
+EXIT_LINES = {
+    "close": [
+        "Quitting at {chips} 🪙? {gap} 🪙 from breaking the bank. {name} can't tell if you're wise or a coward.",
+        "You walk away {gap} 🪙 short of the vault. The vault breathes a sigh of relief.",
+        "Leaving with {chips} 🪙. The pit boss watches you go and finally unclenches.",
+        "\"You were SO close,\" {name} calls after you. \"I had a speech ready!\"",
+    ],
+    "up": [
+        "Up {up} 🪙 and leaving? Most people don't know when to stop. Tonight, you do.",
+        "You leave {up} 🪙 richer. {name} bows. The wheel sulks.",
+        "Leaving while ahead. {name} has only seen this twice, and one of those was a fire drill.",
+        "{chips} 🪙. A winner. You tell yourself it was skill. {name} lets you.",
+    ],
+    "even": [
+        "Back where you started. A whole evening, and the universe is exactly as it was.",
+        "You leave with {chips} 🪙. Net result: one evening, gone. Zero edge, zero gain.",
+        "Even. {name} shakes your hand. \"See you never, probably.\"",
+    ],
+    "down": [
+        "You leave with {chips} 🪙, {down} 🪙 lighter. The experience was priceless. Well, {down} 🪙.",
+        "{name} waves goodbye with the hand that wasn't cheating for you.",
+        "Leaving with {chips} 🪙. A strategic retreat. Also known as a retreat.",
+        "You pocket your {chips} 🪙 and leave with the dignity of someone who has {chips} 🪙.",
+    ],
+    "broke": [
+        "You leave with nothing. The doorman holds the door open in a way that feels personal.",
+        "Flat broke and leaving. {name} wishes you luck, and doesn't mean it in a betting way.",
+        "You leave with 0 🪙 and a story nobody wants to hear.",
+        "\"Come back when you have chips,\" says {name}. \"Or don't. Either is fine.\"",
+    ],
+    "last_chance": [
+        "Broke, with one bailout left and security stretching by the door. Leaving is honestly the smart move.",
+        "You slip out before security finishes counting to three. They look disappointed.",
+        "Smart. One more beg and you'd have left horizontally.",
+        "{name} salutes as you go. \"Security was looking forward to this.\"",
+    ],
+}
+EXIT_CROUPIER = {
+    "friend": [
+        "{name} looks crushed. \"But I was cheating so well for you.\"",
+        "{name} taps {his} nose and mouths: 'same time tomorrow?'",
+        "\"Our little secret,\" whispers {name}. \"Tell no one. Especially the pit boss.\"",
+    ],
+    "spite": [
+        "{name} waves you off with exactly zero fingers. Like your tips.",
+        "\"Bye,\" says {name}, which in {lang} is apparently an insult.",
+    ],
+    "honest": [
+        "{name} watches you all the way to the exit. Then keeps watching.",
+    ],
+}
+
+
+def _finals(history):
+    """The number that settled each spin (the super-spin number after a zero)."""
+    out = []
+    for h in history:
+        try:
+            out.append(int(str(h).split(">")[-1]))
+        except ValueError:
+            pass
+    return out
+
+
+def _color_run(nums):
+    """(colour, length) of the colour streak at the end of `nums`."""
+    if not nums or number_color(nums[-1]) == "green":
+        return None, 0
+    color, k = number_color(nums[-1]), 0
+    for n in reversed(nums):
+        if number_color(n) != color:
+            break
+        k += 1
+    return color, k
+
+
+def _zigzag(nums):
+    """How many spins at the end of `nums` alternate red/black."""
+    k = 0
+    for i in range(len(nums) - 1, -1, -1):
+        if number_color(nums[i]) == "green":
+            break
+        if k and number_color(nums[i]) == number_color(nums[i + 1]):
+            break
+        k += 1
+    return k
+
+
+def near_miss(bets, first, second):
+    """Your inside-bet number right next to where the ball landed, or None."""
+    landed, order = (second, SUPER_WHEEL_ORDER) if first == 0 else (first, WHEEL_ORDER)
+    if landed is None:
+        return None
+    mine = set()
+    for b in bets:
+        if len(b["numbers"]) <= 6:
+            mine |= set(b["numbers"])
+    if not mine or landed in mine:
+        return None
+    i = order.index(landed)
+    for n in (order[i - 1], order[(i + 1) % len(order)]):
+        if n in mine:
+            return landed, n
+    return None
+
+
+def pattern_before(style, history, bets):
+    """React to what you're betting, given recent spins."""
+    nums = _finals(history)
+    if not nums or FLAVOR.random() >= 0.6:
+        return
+    streak, count = _color_run(nums)
+    keys = {b["key"] for b in bets}
+    if count >= 4 and keys & {"red", "black"}:
+        other = "black" if streak == "red" else "red"
+        if other in keys and streak not in keys:
+            return say(style, "gamblers_fallacy", streak=streak, color=other, count=count)
+        if streak in keys and other not in keys:
+            return say(style, "ride_streak", streak=streak, count=count)
+    last = nums[-1]
+    if any(b["numbers"] == frozenset({last}) for b in bets):
+        say(style, "chase_last", n=last)
+
+
+def pattern_after(style, history):
+    """React to the wheel's recent behaviour."""
+    nums = _finals(history)
+    if len(nums) < 2 or FLAVOR.random() >= 0.8:
+        return
+    color, count = _color_run(nums)
+    zig = _zigzag(nums)
+    if nums[-1] == nums[-2]:
+        say(style, "repeat_number", n=nums[-1])
+    elif count in (5, 7, 10) or count >= 12:
+        say(style, "color_streak", color=color, count=count)
+    elif zig in (6, 8, 10) or zig >= 12:
+        say(style, "zigzag", count=zig)
+
+
+def rare_event(style, state, animate):
+    """Once in a while, something happens elsewhere in the casino."""
+    if FLAVOR.randrange(RARE_EVENT_ODDS):
+        return False
+    seen = state["events_seen"] if state is not None else _events_seen
+    unseen = [i for i in range(len(RARE_EVENTS)) if i not in seen]
+    if not unseen:
+        seen.clear()
+        unseen = list(range(len(RARE_EVENTS)))
+    pick = FLAVOR.choice(unseen)
+    seen.append(pick)
+    if state is not None:
+        save_state(state)
+    print()
+    print("  " + style.accent("🎪  M E A N W H I L E …"))
+    for line in RARE_EVENTS[pick]:
+        print("  " + style.dim(fx(line)))
+        sys.stdout.flush()
+        if animate:
+            time.sleep(0.9)
+    return True
+
+
+def leave_table(style, state):
+    """Say goodbye, according to how the night went."""
+    chips = state["chips"]
+    if chips <= 0:
+        mood = "last_chance" if state["run_begs"] >= MAX_BEGS - 1 else "broke"
+    elif chips >= GOAL * 0.7:
+        mood = "close"
+    elif chips > STARTING_CHIPS:
+        mood = "up"
+    elif chips == STARTING_CHIPS:
+        mood = "even"
+    else:
+        mood = "down"
+    print(style.dim(f"  You leave the table with {chips} 🪙."))
+    print("  " + fx(FLAVOR.choice(EXIT_LINES[mood]), chips=chips, gap=GOAL - chips,
+                    up=chips - STARTING_CHIPS, down=STARTING_CHIPS - chips))
+    who = "honest" if state["honest"] else "friend" if luck(state) > 0 else \
+        "spite" if luck(state) < 0 else ""
+    if who and FLAVOR.random() < 0.7:
+        croak(style, FLAVOR.choice(EXIT_CROUPIER[who]))
+
+
 def martingale_level(state, stake):
     """How many times in a row the player has doubled their stake after a loss."""
     if state["last_net"] < 0 and state["last_stake"] > 0 and stake >= 2 * state["last_stake"]:
@@ -2267,6 +2606,7 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
     first, second = throw_ball()
     results = settle_round(bets, first, second)
     stake = sum(b["stake"] for b in bets)
+    history_before = list(state["history"]) if state is not None else []
     live = state is not None and not dry_run and bool(bets)
     chips_before = state["chips"] if state is not None else 0
     mart = martingale_level(state, stake) if live else 0
@@ -2312,10 +2652,15 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
     set_dealer(old_dealer)  # the show stars the croupier who threw this ball
     if sulking:
         say(style, "sulk", 0.6)
+    elif on_the_take and stake < SMALL_BET:
+        say(style, "tiny_bets", 0.6, stake=stake)
     elif on_the_take:
         say(style, "accomplice", 0.6)
     elif live and state["honest"] and not (rig and rig["caught"]):
         say(style, "honest", 0.4)
+    if live:
+        pattern_before(style, history_before, bets)
+    rare_event(style, state if not dry_run else None, animate)
     if animate:
         print(style.dim("  no more bets… the ball is rolling"))
     if ball_misbehaves(style, animate) and animate:
@@ -2370,8 +2715,14 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
             if net > 0 and shown["streak"] >= 2:
                 line += style.bright(f"   🔥 streak x{shown['streak']}")
         print(line)
-        if not rig:  # rigged, spoiled and busted spins already had their own lines
+        miss = near_miss(bets, first, second) if net < 0 else None
+        if not rig and miss and (shown is None or shown["chips"] > 0) \
+                and FLAVOR.random() < 0.8:
+            say(style, "near_miss", landed=miss[0], mine=miss[1])
+        elif not rig:  # rigged, spoiled and busted spins already had their own lines
             result_quip(style, shown if live else None, results, net, mart, chips_before, mood)
+        if live:
+            pattern_after(style, shown["history"])
         if dry_run:
             print(style.dim("  (dry run — no chips moved)"))
         elif state is not None and state["chips"] <= 0:
@@ -2568,8 +2919,7 @@ def interactive(style, *, animate=True):
         cmd = line.lower()
 
         if cmd in ("q", "quit", "exit", "leave"):
-            print(style.dim(f"  You leave the table with {state['chips']} 🪙. "
-                            "Come back any time."))
+            leave_table(style, state)
             return 0
         if cmd in ("h", "help", "?"):
             print(INTERACTIVE_HELP)

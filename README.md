@@ -96,6 +96,8 @@ at the table (or `roulette --tip 2`) buys luck, shown in your prompt as `🍀 +5
   tips are wasted, and an **honest** croupier takes over. **Every bust doubles
   the pit boss's suspicion for the rest of the run** (×2, ×4, ×8…), whichever
   table you're at. They know your face now.
+  Bribing your croupier while betting tiny amounts makes them nervous, and
+  they'll tell you so: small bets mean long runs, and long runs mean busts.
 - **Want someone else?** `swap_table` (or `roulette --swap-table`) moves you to
   another table with a different croupier. Your luck starts over at `🍀 +0%`.
   Right after a bust, the pit boss won't let you move for 5 spins.
@@ -132,6 +134,14 @@ Other antics (all cosmetic):
   under table six, or toward the exit — before the croupier re-throws it.
 - **Fireworks.** Hit a straight-up number (or break the bank) for a tiny ASCII
   show. 🎆
+- **Near misses.** When the ball lands one pocket away from your number on the
+  wheel, the croupier takes it personally. On your behalf. Mostly.
+- **Pattern spotting.** Streaks of one colour, alternating colours and repeat
+  numbers all get noticed, and so does betting that a colour is "due".
+- **Meanwhile…** About once every 50 spins, something happens elsewhere in the
+  casino. There are 20 of these, and you'll see every one before any repeats.
+- **Leaving.** `quit` gets a send-off that depends on how your night went, and
+  on whether your croupier misses your bribes.
 - **Pray.** `pray` at the table (or `roulette --pray`) asks the roulette gods
   for help. They have opinions, not powers, and they know whether you've been
   tipping, whether you're broke, and whether you're one spin from glory. Pray
@@ -247,8 +257,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.2.0/roulette_2.2.0_all.deb
-sudo apt install ./roulette_2.2.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.3.0/roulette_2.3.0_all.deb
+sudo apt install ./roulette_2.3.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -259,13 +269,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.2.0_all.deb
-sudo apt install ./dist/roulette_2.2.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.3.0_all.deb
+sudo apt install ./dist/roulette_2.3.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.2.0_all.deb`).
+`../roulette_2.3.0_all.deb`).
 </details>
 
 ### 2. From source

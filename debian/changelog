@@ -1,3 +1,16 @@
+roulette (2.3.0) unstable; urgency=medium
+
+  * Near misses: the croupier reacts when the ball lands one pocket away
+    from your number on the wheel.
+  * Bribing the croupier on bets under 20 chips makes them nervous (and
+    hints that bigger bets finish runs before the pit boss catches up).
+  * Pattern reactions: repeat numbers, colour streaks, alternating colours,
+    betting that a colour is "due", riding a streak, chasing the last number.
+  * 20 rare casino events (about 1 spin in 50), dealt without repeats.
+  * Leaving the table gets a send-off that depends on how the night went.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.2.0) unstable; urgency=medium
 
   * Tips are worth half as much luck: +2.5% per chip (was +5%), still
