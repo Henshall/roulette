@@ -15,7 +15,7 @@ your losing spins, as long as the pit boss doesn't notice. Go broke and you can
 [**beg**](#-broke) for more, twice. The third time, security walks you out.
 
 ```bash
-pipx install zero-edge-roulette       # Linux or macOS, with Python 3
+pipx install roulette-game            # Linux or macOS, with Python 3
 brew install henshall/tap/roulette    # macOS
 ```
 
@@ -295,12 +295,12 @@ Or with the full Debian toolchain:
 ### 2. Any Linux or macOS (pipx)
 
 ```bash
-pipx install zero-edge-roulette
+pipx install roulette-game
 ```
 
 Installs the `roulette` command into its own environment. Upgrade with
-`pipx upgrade zero-edge-roulette`, remove with `pipx uninstall zero-edge-roulette`.
-(Plain `pip install --user zero-edge-roulette` works too.) The man page is
+`pipx upgrade roulette-game`, remove with `pipx uninstall roulette-game`.
+(Plain `pip install --user roulette-game` works too.) The man page is
 only included in the `.deb`, Homebrew and from-source installs.
 
 ### 3. macOS (Homebrew)

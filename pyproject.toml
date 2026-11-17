@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "zero-edge-roulette"
+name = "roulette-game"
 dynamic = ["version"]
-description = "A zero-edge roulette table for the terminal, with a croupier you can bribe"
+description = "A roulette game for the terminal, with a croupier you can bribe"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -25,20 +25,20 @@ Homepage = "https://github.com/Henshall/roulette"
 Issues = "https://github.com/Henshall/roulette/issues"
 
 [project.scripts]
-roulette = "zero_edge_roulette.game:run"
+roulette = "roulette_game.game:run"
 
 # The version comes from `__version__ = "..."` in the roulette script.
 [tool.hatch.version]
 path = "roulette"
 
-# Ship the single-file script as zero_edge_roulette/game.py.
+# Ship the single-file script as roulette_game/game.py.
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
 core-metadata-version = "2.4"   # what PyPI's upload tools accept
 
 [tool.hatch.build.targets.wheel.force-include]
-"roulette" = "zero_edge_roulette/game.py"
-"packaging/pypi/__init__.py" = "zero_edge_roulette/__init__.py"
+"roulette" = "roulette_game/game.py"
+"packaging/pypi/__init__.py" = "roulette_game/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 core-metadata-version = "2.4"

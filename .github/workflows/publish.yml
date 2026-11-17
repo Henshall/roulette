@@ -3,7 +3,7 @@ name: publish to PyPI
 # Runs when a GitHub release is published. Uses PyPI "trusted publishing":
 # no password or token is stored anywhere. One-time setup on pypi.org:
 # Account -> Publishing -> add a pending publisher with
-#   project: zero-edge-roulette   owner: Henshall   repository: roulette
+#   project: roulette-game        owner: Henshall   repository: roulette
 #   workflow: publish.yml         environment: pypi
 on:
   release:
