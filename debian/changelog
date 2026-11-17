@@ -1,3 +1,13 @@
+roulette (2.1.0) unstable; urgency=medium
+
+  * New `pray` command (and --pray): pray to the roulette gods, who reply
+    according to your luck, bankroll and croupier. Purely cosmetic.
+  * Begging is now limited: two bailouts per run. Beg a third time and
+    security throws you out of the casino (one of ten random scenes) and
+    the game starts over with a fresh run.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.0.0) unstable; urgency=medium
 
   * `roulette` is now a real roulette table: a single-zero wheel, the full

@@ -1,4 +1,4 @@
-.TH ROULETTE 1 "November 2026" "roulette 2.0.0" "User Commands"
+.TH ROULETTE 1 "November 2026" "roulette 2.1.0" "User Commands"
 .SH NAME
 roulette \- a zero-edge roulette table in your terminal
 .SH SYNOPSIS
@@ -112,6 +112,10 @@ Command mode: keep the reel on screen after it lands.
 .BI \-\-timeout " SECS"
 Command mode: seconds to allow the winning command to run (default: 15).
 .TP
+.B \-\-pray
+Pray to the roulette gods. They reply according to how your night is going;
+the odds are unchanged.
+.TP
 .B \-\-swap\-table
 Move to another table with a different croupier; your luck starts over at zero.
 .TP
@@ -122,8 +126,10 @@ luck by 5%; with negative luck the croupier spoils that share of winning spins.
 .TP
 .B \-\-beg
 Beg the house for chips \(em the only way to earn them back. While broke the
-house spots you 100 chips through 20 escalating levels of sass; beg with money
-in hand and it mocks you instead.
+house spots you 100 chips, with escalating sass; beg with money
+in hand and it mocks you instead. The house bails you out only twice per run:
+beg a third time and you are thrown out of the casino and lose the game,
+which then starts over with a new run of 100 chips.
 .TP
 .B \-\-stats
 Show the bankroll, record, realized return and recent numbers, then exit.

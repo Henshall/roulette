@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -265,6 +265,7 @@ RUSSIAN = "☠  RUSSIAN ROULETTE  ☠  (send everything here to the trash)"
 # ---------------------------------------------------------------------------
 STARTING_CHIPS = 100
 GOAL = 1000              # reach this to break the bank and win the run
+MAX_BEGS = 3             # the Nth beg in a run gets you thrown out (game over)
 HISTORY_LEN = 20
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".roulette", "state.json")
 MARQUEE_MARKERS = ("🏆", "JACKPOT", "lottery")
@@ -281,7 +282,9 @@ DEFAULT_STATE = {
     "run": 1, "run_spins": 0, "run_begs": 0, "run_tipped": 0,
     "tip_log": [], "tip_pending": 0,
     "honest": 0, "croupier": "", "banks_broken": 0, "best_run": 0,
-    "rigs": 0, "caught": 0, "run_rigs": 0, "run_caught": 0, "heat": 0, "martingale": 0, "last_stake": 0, "last_net": 0,
+    "rigs": 0, "caught": 0, "run_rigs": 0, "run_caught": 0, "heat": 0,
+    "prayers": 0, "pray_streak": 0, "kicked_out": 0,
+    "martingale": 0, "last_stake": 0, "last_net": 0,
 }
 
 # Begging is the ONLY way to earn chips back. Beg with money in hand and you get
@@ -301,31 +304,30 @@ BEG_INSULTS = [
     "The house ran your balance twice. Still {chips} 🪙. Still no.",
     "Begging while solvent? The house is filing a formal complaint.",
 ]
-BEG_LEVELS = [
-    "💸 Flat broke already? Fine — 100 🪙. Beginner's luck runs out fast.",
-    "🙂 Back so soon? Here's 100 🪙. Try to make it last this time.",
-    "🙄 Again? 100 🪙. The house is starting to notice.",
-    "📋 Bailout #4. 100 🪙. A tab is being opened on your dignity.",
-    "😐 100 🪙. The house reminds you that betting is, in fact, optional.",
-    "😤 Six times?! 100 🪙. Have you considered a different hobby?",
-    "🧾 100 🪙. The house is now itemizing your poor decisions.",
-    "🫤 Here. 100 🪙. Don't spend it all in one spin. Oh wait — you will.",
-    "😮‍💨 100 🪙. The house sighs so hard the chandelier rattles.",
-    "🔟 Ten times broke. 100 🪙. This is a cry for help, not a strategy.",
-    "🤨 100 🪙. The house is quietly googling 'intervention, how to stage'.",
-    "😑 100 🪙. We're not angry. We're just disappointed. On a loop.",
-    "🪑 100 🪙. The house is considering charging you rent for that seat.",
-    "🫠 100 🪙. At this point the house is simply enabling you.",
-    "📉 100 🪙. Your net worth is a rounding error and a dream.",
-    "😵‍💫 100 🪙. The house has stopped making eye contact with you.",
-    "🧎 Beg #17. 100 🪙. The floor has memorized your knee prints.",
-    "🤷 100 🪙. The house has given up trying to teach you anything.",
-    "🙏 100 🪙. Even the slot machines feel bad for you now.",
-    "🎻 100 🪙. The house has hired a tiny violinist. Just for you.",
-    "📸 100 🪙. Your photo is now on the wall, next to the Martingale guy.",
-    "🧓 100 🪙. The house remembers when you were young and solvent.",
-    "🕯️ 100 🪙. The house lights a candle for your bankroll every night.",
-    "🏆 Twenty-four times broke — a record! 100 🪙, and your failure gets framed on the wall.",
+# One pool per bailout in a run (the house only gives MAX_BEGS - 1 of them);
+# a line is picked at random from the pool for that bailout.
+BEG_LINES = [
+    [  # first bailout this run
+        "💸 Flat broke already? Fine — 100 🪙. Beginner's luck runs out fast.",
+        "🙂 Here's 100 🪙. Try to make it last this time.",
+        "😐 100 🪙. The house reminds you that betting is, in fact, optional.",
+        "🫤 Here. 100 🪙. Don't spend it all in one spin. Oh wait — you will.",
+        "🧾 100 🪙. The house opens a small tab on your dignity.",
+        "🤨 100 🪙. The house writes your name down. Just in case.",
+        "🙏 100 🪙. Even the slot machines feel a little bad for you.",
+        "🪑 100 🪙. The house lets you keep the seat. For now.",
+    ],
+    [  # second (last) bailout this run
+        "🙄 Again? 100 🪙. The house is starting to notice.",
+        "😤 Twice?! 100 🪙. Have you considered a different hobby?",
+        "😮‍💨 100 🪙. The house sighs so hard the chandelier rattles.",
+        "😑 100 🪙. We're not angry. We're just disappointed.",
+        "📉 100 🪙. Your net worth is a rounding error and a dream.",
+        "😵‍💫 100 🪙. The house has stopped making eye contact with you.",
+        "🎻 100 🪙. The house has hired a tiny violinist. Just for you.",
+        "🧎 100 🪙. The floor has started memorizing your knee prints.",
+        "🕯️ 100 🪙. The house lights a candle for your bankroll.",
+    ],
 ]
 
 
@@ -725,17 +727,21 @@ def show_stats(style):
     print(f"  Wins/Losses:  {s['wins']} / {s['losses']}  ({rate:.0f}% win rate)")
     print(f"  Streak:       {s['streak']}  (best {s['best_streak']})")
     print(f"  Biggest win:  {s['biggest_win']} 🪙")
-    print(f"  Times broke:  {s['broke_count']} 😬")
+    print(f"  Times broke:  {s['broke_count']} 😬  (all runs)")
     if s["wagered"]:
         ret = 100.0 * s["net"] / s["wagered"]
         print(f"  Wagered:      {s['wagered']} 🪙  (net {s['net']:+d}, "
               f"{ret:+.1f}% return — the house edge is 0%)")
     print(f"  This run:     #{s['run']} · {s['chips']}/{GOAL:,} 🪙 · {s['run_spins']} spins"
-          f" · {s['run_begs']} begs"
+          f" · {s['run_begs']}/{MAX_BEGS - 1} bailouts"
           + (f" · busted {s['run_caught']}× (pit boss risk ×{2 ** s['run_caught']})"
              if s["run_caught"] else ""))
     best = f" (fastest: {s['best_run']} spins)" if s["best_run"] else ""
     print(f"  Banks broken: {s['banks_broken']} 🏦{best}")
+    if s["kicked_out"]:
+        print(f"  Kicked out:   {s['kicked_out']} time{'s' if s['kicked_out'] != 1 else ''} 🚪")
+    if s["prayers"]:
+        print(f"  Prayers:      {s['prayers']} 🙏  (answered: technically all of them)")
     if s["tips"] or s["rigs"] or s["caught"]:
         print(f"  Bribery:      {s['tips']} 🪙 tipped · {s['rigs']} rigged spins · "
               f"caught {s['caught']} time{'s' if s['caught'] != 1 else ''} 🚨")
@@ -749,9 +755,10 @@ def show_stats(style):
     return 0
 
 
-def beg(style):
+def beg(style, animate=True):
     """The only way to earn chips back. Broke -> the house spots you 100 (with
-    escalating sass). Not broke -> you get mocked for begging with money."""
+    escalating sass). Not broke -> you get mocked for begging with money.
+    Beg MAX_BEGS times in one run and security throws you out: game over."""
     state = load_state()
     print()
     if state["chips"] > 0:
@@ -759,16 +766,109 @@ def beg(style):
         print("  " + random.choice(BEG_INSULTS).format(chips=state["chips"]))
         return 0
 
+    if state["run_begs"] + 1 >= MAX_BEGS:
+        kicked_out(style, state, animate)
+        return 0
+
     state["broke_count"] += 1
     state["run_begs"] += 1
     state["chips"] += 100
-    level = min(state["broke_count"], len(BEG_LEVELS))
+    pool = BEG_LINES[min(state["run_begs"], len(BEG_LINES)) - 1]
     print("  " + style.accent("🙏 you grovel before the house…"))
-    print("  " + BEG_LEVELS[level - 1])
+    print("  " + FLAVOR.choice(pool))
     print("  balance " + style.bright(f"{state['chips']} 🪙")
-          + style.dim(f"    ·    times gone broke: {state['broke_count']}"))
+          + style.dim(f"    ·    bailouts this run: {state['run_begs']}/{MAX_BEGS - 1}"))
+    left = MAX_BEGS - 1 - state["run_begs"]
+    if left == 0:
+        print("  " + style.red("⚠️  Security is watching. Beg once more and you're out."))
+    else:
+        print("  " + style.dim(f"  The house is counting: {left} more bailout"
+                               f"{'s' if left != 1 else ''} before security gets involved."))
     save_state(state)
     return 0
+
+
+# Beg one time too many and you get thrown out of the casino. One of these
+# scenes plays at random, then the game starts over with a new run.
+KICKED_OUT_SCENES = [
+    ["The house stops mid-sigh. A velvet rope is unclipped.",
+     "Two security guards appear on either side of you, like bookends.",
+     "\"Sir, ma'am, or whatever you are tonight. Time to go.\"",
+     "You are carried out by the elbows. Your feet do not touch the carpet."],
+    ["{name} presses a small red button under the table.",
+     "\"Sorry,\" {he} mouths. {He} does not look sorry.",
+     "A trapdoor would have been quicker, but the casino settles for a bouncer named Doug.",
+     "Doug walks you out. Doug says nothing. Doug has seen this before."],
+    ["The pit boss arrives holding a clipboard with your begging history on it.",
+     "It is three pages long. She reads all three pages out loud.",
+     "\"The house has decided to stop enabling you.\"",
+     "You are escorted out through the kitchen, past a chef who shakes his head."],
+    ["The lights dim. A spotlight finds you. The band stops playing.",
+     "\"Ladies and gentlemen,\" says the PA, \"the beggar at table six is leaving.\"",
+     "Polite applause. {name} claps the loudest.",
+     "You do the walk of shame across the entire casino floor."],
+    ["You get down on your knees for the third time tonight.",
+     "Security gets down on their knees too, just long enough to pick you up.",
+     "\"Beg outside,\" one of them says. \"It's free out there.\"",
+     "The revolving door spins you onto the pavement. It is raining, obviously."],
+    ["{name} slowly takes off {his} bow tie and lays it on the felt.",
+     "\"I can't watch this anymore,\" {he} whispers, and waves to security.",
+     "Your photo is printed, laminated and pinned behind the cashier's cage: BANNED.",
+     "They let you keep the complimentary mint. You were not offered a mint."],
+    ["The house quietly cancels your seat. Then your table. Then your existence.",
+     "A guard hands you your coat. It is not your coat. You take it anyway.",
+     "\"Don't come back,\" says the doorman, \"until you've reset your life.\"",
+     "Behind you, {name} is already wiping down your chair."],
+    ["The chandelier rattles. The house has sighed for the last time.",
+     "A man in a very expensive suit points at you, then at the exit.",
+     "\"We are a fair casino,\" he says. \"Zero edge. Zero patience.\"",
+     "You are walked out by four guards, which feels excessive for someone with 0 🪙."],
+    ["{name} rings a small brass bell. Everyone in the casino turns around.",
+     "\"Beggar's bell,\" {he} explains. \"We only ring it once a night.\"",
+     "Security arrives at a jog. A slot machine plays a sad little tune.",
+     "You are deposited in the car park next to the Martingale guy. He waves."],
+    ["Your request for chips is forwarded to the manager. The manager is security.",
+     "\"Request denied,\" says security, cracking their knuckles.",
+     "\"Request for dignity also denied,\" adds {name}, helpfully.",
+     "The fire exit opens. You are the fire."],
+]
+GAME_OVER_EPITAPHS = [
+    "Your bankroll is survived by three empty pockets and a lot of excuses.",
+    "The house would like to thank you for your contribution of nothing.",
+    "Somewhere, a tiny violinist plays you out.",
+    "Your seat is reassigned before you reach the door.",
+    "Fair game, zero edge, and you still ran out of luck and manners.",
+]
+
+
+def kicked_out(style, state, animate=True):
+    """One beg too many: security throws you out, the run is lost and the game
+    starts over (lifetime stats are kept)."""
+    print("  " + style.accent("🙏 you grovel before the house… again…"))
+    sys.stdout.flush()
+    if animate:
+        time.sleep(1.0)
+    print()
+    print("  " + style.red("🚪  K I C K E D   O U T  🚪"))
+    for line in FLAVOR.choice(KICKED_OUT_SCENES):
+        print("  " + style.red(fx(line)))
+        sys.stdout.flush()
+        if animate:
+            time.sleep(0.9)
+    print()
+    print("  " + style.bright("💀  G A M E   O V E R  💀"))
+    print("  " + style.dim(f"run #{state['run']}  ·  {state['run_spins']} spins  ·  "
+                           f"begged {MAX_BEGS} times  ·  thrown out of the casino"))
+    print("  " + style.dim(FLAVOR.choice(GAME_OVER_EPITAPHS)))
+    state["kicked_out"] += 1
+    restock_run(state)
+    save_state(state)
+    if animate:
+        time.sleep(1.2)
+    print()
+    print(style.dim(f"  You sneak back in through a different door. Run #{state['run']} "
+                    f"starts with {STARTING_CHIPS} 🪙."))
+    croak(style, "Good evening. I'm {name}. I don't believe we've met. Let's keep it that way.")
 
 
 def settle_bet(style, winner, bet, target):
@@ -2015,6 +2115,102 @@ def tip_croupier(style, state, amount, free=None):
     return True
 
 
+# Praying to the roulette gods. Purely theatrical: the gods have no vote (the
+# croupier does). What they say depends on how your night is going.
+PRAYERS = {
+    "plain": [
+        "The gods are on hold. Your prayer is important to them.",
+        "A voice booms: \"WHO DARES DISTURB… oh, it's a roulette thing. Carry on.\"",
+        "The gods consider your request and file it under 'maybe'.",
+        "Somewhere, a celestial croupier says 'no more bets' and ignores you.",
+        "The gods remind you that they are, strictly speaking, not allowed to gamble.",
+        "Thunder rumbles. It's just the casino's air conditioning.",
+        "A single feather drifts down onto the felt. Nobody knows what it means.",
+    ],
+    "blessed": [
+        "The gods squint at the table. \"You already have {name} helping. Greedy.\"",
+        "A voice booms: \"WE SEE THE TIPS. WE ARE… IMPRESSED.\"",
+        "The gods high-five {name} from the heavens. {name} pretends not to notice.",
+        "\"Divine intervention AND a bribed croupier?\" The gods admire your hustle.",
+        "The gods take a small cut of {name}'s tips. Just for the paperwork.",
+        "A beam of golden light hits your chips. {name} quietly adjusts {his} sunglasses.",
+    ],
+    "cursed": [
+        "The gods have heard about your zero tip. They are on {name}'s side.",
+        "A voice booms: \"TIP. THE. CROUPIER.\" Then silence.",
+        "A small, personal raincloud forms over your seat. 🌧️",
+        "The gods hand {name} a tiny trophy that says 'Most Wronged Croupier'.",
+        "Your prayer is returned to sender, stamped 'CHEAPSKATE'.",
+        "The gods would help, but they also tip their croupiers. You don't.",
+    ],
+    "broke": [
+        "The gods look at your empty pockets. They suggest the beg wall. Loudly.",
+        "A voice booms: \"WE DON'T DO BAILOUTS. TRY BEGGING.\"",
+        "The gods send you a coupon for 10% off your next 0 chips.",
+        "Even the gods won't spot you. They have seen your betting history.",
+        "A heavenly choir sings, softly, the word 'beg'.",
+        "The gods offer you thoughts and prayers. Mostly thoughts.",
+    ],
+    "honest": [
+        "The gods glance at the pit boss and decide to stay out of this one.",
+        "A voice booms: \"WE ARE NOT GETTING INVOLVED IN A CRIME SCENE.\"",
+        "The gods respect {name}'s new honesty. They will not be corrupting {him} tonight.",
+        "Your prayer is intercepted by the pit boss, who reads it out loud.",
+        "The gods send down a single word: 'swap_table'. Then they hang up.",
+    ],
+    "close": [
+        "The gods lean in. They have money on you now.",
+        "A voice booms: \"SO CLOSE. DON'T BLOW IT. NO PRESSURE.\"",
+        "The gods start chanting your name. The pit boss starts watching your table.",
+        "The gods hand you a tiny pre-written victory speech. Just in case.",
+        "Thunder, lightning, a choir. The gods really want to see the bank break.",
+    ],
+    "annoyed": [
+        "The gods have muted your prayers. Please spin something.",
+        "A voice booms: \"YOU AGAIN?! PLACE A BET.\"",
+        "Your prayer goes to voicemail. The voicemail is just a sigh.",
+        "The gods send an automated reply: 'Out of office until you actually play.'",
+        "Divine patience exhausted. A celestial bouncer appears. Wait, no, that's just {name}.",
+        "The gods are now praying for YOU to stop praying.",
+    ],
+}
+PRAYER_CROUPIER = [
+    "{name} pretends not to see you praying at the table.",
+    "{name} crosses {himself}, just to be on the safe side.",
+    "\"In {lang}, we just tip,\" says {name}, pointedly.",
+    "{name} quietly asks the gods to put in a good word for {him} too.",
+    "{name} offers you a small candle. It costs 1 🪙. You decline.",
+    "{name} has seen people pray at this table before. {He} has also seen them beg.",
+]
+
+
+def pray(style, state):
+    """Pray to the roulette gods. It never changes the odds; it does get you judged."""
+    state["prayers"] += 1
+    state["pray_streak"] += 1
+    if state["pray_streak"] > 3:
+        mood = "annoyed"
+    elif state["chips"] <= 0:
+        mood = "broke"
+    elif state["honest"]:
+        mood = "honest"
+    elif luck(state) < 0:
+        mood = "cursed"
+    elif state["chips"] >= GOAL * 0.8:
+        mood = "close"
+    elif luck(state) > 0:
+        mood = "blessed"
+    else:
+        mood = "plain"
+    print("  " + style.dim("🙏 You clasp your hands and pray to the roulette gods…"))
+    sys.stdout.flush()
+    print("  " + style.accent("⚡ ") + fx(FLAVOR.choice(PRAYERS[mood])))
+    if FLAVOR.random() < 0.4:
+        croak(style, FLAVOR.choice(PRAYER_CROUPIER))
+    save_state(state)
+    return True
+
+
 def swap_table(style, state):
     """Move to another table, with a different croupier. Your luck doesn't transfer.
 
@@ -2090,6 +2286,7 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
         state["martingale"], state["last_stake"], state["last_net"] = mart, stake, net
         log_spin_tips(state)
         state["heat"] = max(0, state["heat"] - 1)
+        state["pray_streak"] = 0
         if rig and rig["caught"]:
             state["caught"] += 1
             state["run_caught"] += 1
@@ -2194,9 +2391,15 @@ def start_new_run(state):
     state["banks_broken"] += 1
     if not state["best_run"] or state["run_spins"] < state["best_run"]:
         state["best_run"] = state["run_spins"]
+    restock_run(state)
+
+
+def restock_run(state):
+    """Start the next run: 100 chips, run counters cleared, a new croupier."""
     state["run"] += 1
     state["chips"] = STARTING_CHIPS
     for k in ("run_spins", "run_begs", "run_tipped", "run_rigs", "run_caught", "tip_pending",
+              "pray_streak",
               "honest", "heat",
               "martingale", "last_stake", "last_net"):
         state[k] = 0
@@ -2259,8 +2462,10 @@ INTERACTIVE_HELP_TEMPLATE = """\
                  caught by the pit boss and you lose the bet, and an honest
                  croupier takes over.
   swap_table     move to another table with a new croupier (luck resets to 0)
+  pray           pray to the roulette gods (they have opinions, not powers)
   quit           leave the table
-  beg            go broke and you can beg the house for 100 more"""
+  beg            go broke and you can beg the house for 100 more — but beg
+                 a third time in one run and you're thrown out (game over)"""
 
 
 INTERACTIVE_HELP = INTERACTIVE_HELP_TEMPLATE.format(
@@ -2380,8 +2585,11 @@ def interactive(style, *, animate=True):
             show_stats(style)
             continue
         if cmd == "beg":
-            beg(style)
+            beg(style, animate=animate)
             state = load_state()
+            continue
+        if cmd in ("pray", "pray to the gods", "pray to the roulette gods"):
+            pray(style, state)
             continue
         if cmd in ("swap_table", "swap table", "swaptable",
                    "swap_tables", "swap tables", "swaptables"):
@@ -2512,6 +2720,10 @@ def build_parser():
         help="move to another table with a new croupier (your luck starts over at 0)",
     )
     bet.add_argument(
+        "--pray", action="store_true",
+        help="pray to the roulette gods (it doesn't change the odds)",
+    )
+    bet.add_argument(
         "--tip", type=int, default=None, metavar="CHIPS",
         help=f"tip the croupier; each chip is +{HELP_PER_CHIP * 100:g}%% luck (max "
              f"{HELP_MAX * 100:.0f}%%) that a losing spin gets rigged your way, fading "
@@ -2523,7 +2735,8 @@ def build_parser():
     )
     bet.add_argument(
         "--beg", action="store_true",
-        help="beg the house for chips — the only way to earn them back when broke",
+        help=f"beg the house for chips — the only way to earn them back when broke "
+             f"(beg {MAX_BEGS} times in one run and you're thrown out: game over)",
     )
     bet.add_argument(
         "--reset", action="store_true",
@@ -2703,7 +2916,12 @@ def main(argv=None):
     if args.stats:
         return show_stats(style)
     if args.beg:
-        return beg(style)
+        return beg(style, animate=sys.stdout.isatty())
+    if args.pray:
+        print()
+        pray(style, load_state())
+        if args.bet is None and args.tip is None and not args.swap_table:
+            return 0
     if args.swap_table:
         print()
         ok = swap_table(style, load_state())

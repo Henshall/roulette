@@ -127,6 +127,10 @@ Other antics (all cosmetic):
   under table six, or toward the exit — before the croupier re-throws it.
 - **Fireworks.** Hit a straight-up number (or break the bank) for a tiny ASCII
   show. 🎆
+- **Pray.** `pray` at the table (or `roulette --pray`) asks the roulette gods
+  for help. They have opinions, not powers, and they know whether you've been
+  tipping, whether you're broke, and whether you're one spin from glory. Pray
+  too many times without betting and they put you on mute.
 
 ## 🙏 Broke?
 
@@ -137,10 +141,17 @@ by every mode. The only way to earn chips back is to **beg**:
 roulette --beg
 ```
 
-Beg while **broke** and the house grudgingly spots you 100 🪙 — through **20
-escalating levels of sass** as you keep coming back (it also tallies how many
-times you've gone broke, for posterity). Beg with **money in hand** and you
-just get mocked for it. `roulette --reset` wipes everything back to 100.
+Beg while **broke** and the house grudgingly spots you 100 🪙, with a
+sassier line the second time and a running count of your bailouts this run
+(`stats` also tallies how many times you've gone broke across all runs). Beg
+with **money in hand** and you just get mocked for it. `roulette --reset` wipes everything back to 100.
+
+**Three strikes.** The house only bails you out **twice per run**. Beg a
+**third** time and security throws you out of the casino (one of ten
+different scenes, picked at random) — **game over**. The game then starts
+over with a fresh run: 100 🪙, a new croupier, and a clean beg count. Your
+lifetime stats are kept, including how many times you've been kicked out.
+Begging while you still have chips is just mocked; it doesn't count.
 
 ## 🖥️ Command wheel (`--commands` / `--russian`)
 
@@ -212,6 +223,7 @@ Preview the odds without risk: `roulette --russian --dry-run`.
 | `--timeout SECS` | Command mode: time the winning command may run (default 15) |
 | `--tip CHIPS` | Tip the croupier — recent tips get losing spins rigged your way |
 | `--swap-table` | Move to another table with a new croupier (luck resets to 0) |
+| `--pray` | Pray to the roulette gods (no effect on the odds) |
 | `--beg` / `--stats` / `--reset` | Bankroll management |
 | `--seed N` | Reproducible spin |
 | `--no-color` | Disable ANSI colors (also honors `NO_COLOR`) |
@@ -230,8 +242,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v1.0.0/roulette_2.0.0_all.deb
-sudo apt install ./roulette_2.0.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.1.0/roulette_2.1.0_all.deb
+sudo apt install ./roulette_2.1.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -242,13 +254,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.0.0_all.deb
-sudo apt install ./dist/roulette_2.0.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.1.0_all.deb
+sudo apt install ./dist/roulette_2.1.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.0.0_all.deb`).
+`../roulette_2.1.0_all.deb`).
 </details>
 
 ### 2. From source
