@@ -35,7 +35,7 @@ try:
 except ImportError:  # not on Windows
     termios = None
 
-__version__ = "2.5.0"
+__version__ = "2.5.1"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -499,9 +499,12 @@ CLEAR_LINE = "\033[K"
 
 def term_width(default=80):
     try:
-        return shutil.get_terminal_size((default, 24)).columns
+        cols = shutil.get_terminal_size((default, 24)).columns
     except Exception:
         return default
+    # Some terminals report 0 columns; Python 3.11+ treats that as unknown,
+    # older versions (like macOS's 3.9) pass it through.
+    return cols if cols > 0 else default
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -3497,9 +3500,14 @@ def main(argv=None):
     return casino_main(args, style)
 
 
-if __name__ == "__main__":
+def run():
+    """Command-line entry point (also used by the pip/pipx-installed command)."""
     try:
         sys.exit(main())
     except KeyboardInterrupt:
         sys.stdout.write(SHOW_CURSOR)
         sys.exit(130)
+
+
+if __name__ == "__main__":
+    run()

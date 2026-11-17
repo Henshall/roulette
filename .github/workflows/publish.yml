@@ -1,0 +1,40 @@
+name: publish to PyPI
+
+# Runs when a GitHub release is published. Uses PyPI "trusted publishing":
+# no password or token is stored anywhere. One-time setup on pypi.org:
+# Account -> Publishing -> add a pending publisher with
+#   project: zero-edge-roulette   owner: Henshall   repository: roulette
+#   workflow: publish.yml         environment: pypi
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist and wheel
+        run: pipx run build --outdir dist/pypi
+      - name: Check the package
+        run: pipx run twine check dist/pypi/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/pypi/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/pypi/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi/

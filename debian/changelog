@@ -1,3 +1,12 @@
+roulette (2.5.1) unstable; urgency=medium
+
+  * Now on PyPI: pipx install zero-edge-roulette.
+  * Fix: terminals that report a width of 0 columns no longer make every
+    line wrap at 30 columns on older Pythons (such as macOS's 3.9).
+  * README opens with the hook, a demo GIF and one-line installs.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.5.0) unstable; urgency=medium
 
   * New --spin: spin the real wheel once, just to watch. No bet, and no

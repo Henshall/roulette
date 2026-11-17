@@ -1,23 +1,25 @@
 # 🎰 roulette
 
-A **real roulette table** in your terminal — a single-zero (European) wheel,
-the full betting layout, a persistent bankroll — with one twist:
-**the house has no edge.** Lose it all and you can always
-[**beg**](#-broke) the house for another 100 🪙 (it will judge you).
+**The house has no edge. Your croupier, on the other hand, can be bribed.**
 
-```
-                                ▼
-  ┌────────────────────────────────────────────────────────────┐
-  │ 20  14  31  9   22  18  29  7   28  12  35  3   26  0   32 │
-  └────────────────────────────────────────────────────────────┘
-                                ▲
-  🎯    7    RED · ODD · LOW · 1st 12 · col 1
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Henshall/roulette/main/demo/demo.gif" alt="A game of roulette in the terminal: tip the croupier, a near miss on 17, then a rigged straight-up win" width="748">
+</p>
 
-  ━━ PAYOUTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✅ RED                    10 🪙  1:1    →  +10
-  ❌ 17                      5 🪙  35:1   →  -5
-  net +5 🪙    →    balance 105 🪙
+A real roulette table in your terminal: a single-zero wheel, the full betting
+layout, and a payout rule that makes every bet worth **exactly zero** on
+average. Start with 100 🪙 and try to break the bank at 1,000.
+
+You can't beat a fair wheel. You *can* slip the croupier a few chips to rig
+your losing spins, as long as the pit boss doesn't notice. Go broke and you can
+[**beg**](#-broke) for more, twice. The third time, security walks you out.
+
+```bash
+pipx install zero-edge-roulette       # Linux or macOS, with Python 3
+brew install henshall/tap/roulette    # macOS
 ```
+
+Or grab the [`.deb`](#1-debian--ubuntu-package-deb) for Debian and Ubuntu. Then just type `roulette`.
 
 ## Play
 
@@ -256,8 +258,8 @@ Preview the odds without risk: `roulette --russian --dry-run`.
 
 ## Install
 
-Three ways: the prebuilt **`.deb`** (Debian/Ubuntu), **Homebrew** (macOS), or
-**from source** (anywhere). roulette is a single Python 3 script (3.6 or newer)
+Four ways: the prebuilt **`.deb`** (Debian/Ubuntu), **pipx** (any Linux or
+macOS), **Homebrew** (macOS), or **from source**. roulette is a single Python 3 script (3.6 or newer)
 with no third-party dependencies, just `python3` and `bash`, which ship with
 every Linux distro and with Apple's Command Line Tools on macOS. Every change is
 tested on both Linux and macOS.
@@ -269,8 +271,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.5.0/roulette_2.5.0_all.deb
-sudo apt install ./roulette_2.5.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.5.1/roulette_2.5.1_all.deb
+sudo apt install ./roulette_2.5.1_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -281,16 +283,27 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.5.0_all.deb
-sudo apt install ./dist/roulette_2.5.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.5.1_all.deb
+sudo apt install ./dist/roulette_2.5.1_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.5.0_all.deb`).
+`../roulette_2.5.1_all.deb`).
 </details>
 
-### 2. macOS (Homebrew)
+### 2. Any Linux or macOS (pipx)
+
+```bash
+pipx install zero-edge-roulette
+```
+
+Installs the `roulette` command into its own environment. Upgrade with
+`pipx upgrade zero-edge-roulette`, remove with `pipx uninstall zero-edge-roulette`.
+(Plain `pip install --user zero-edge-roulette` works too.) The man page is
+only included in the `.deb`, Homebrew and from-source installs.
+
+### 3. macOS (Homebrew)
 
 ```bash
 brew install henshall/tap/roulette
@@ -300,7 +313,7 @@ Upgrade with `brew upgrade roulette`, remove with `brew uninstall roulette`.
 It runs on the `python3` that comes with Apple's Command Line Tools (Homebrew
 already needs those). Without Homebrew, use the from-source install below.
 
-### 3. From source
+### 4. From source
 
 Works on **Linux and macOS** (the `.deb` above is Debian/Ubuntu only):
 
