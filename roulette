@@ -16,17 +16,26 @@ harmless, read-only shell commands and runs the winner.
 """
 
 import argparse
+import contextlib
+import difflib
 import json
 import os
 import platform
 import random
 import re
+import select
 import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 
-__version__ = "2.3.0"
+try:
+    import termios
+except ImportError:  # not on Windows
+    termios = None
+
+__version__ = "2.4.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -283,7 +292,7 @@ DEFAULT_STATE = {
     "tip_log": [], "tip_pending": 0,
     "honest": 0, "croupier": "", "banks_broken": 0, "best_run": 0,
     "rigs": 0, "caught": 0, "run_rigs": 0, "run_caught": 0, "heat": 0,
-    "prayers": 0, "pray_streak": 0, "kicked_out": 0, "events_seen": [],
+    "prayers": 0, "pray_streak": 0, "kicked_out": 0, "events_seen": [], "fast": 0, "seen_help": 0,
     "martingale": 0, "last_stake": 0, "last_net": 0,
 }
 
@@ -495,6 +504,110 @@ def term_width(default=80):
         return default
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_LEAD_RE = re.compile(r"^((?:\x1b\[[0-9;?]*[A-Za-z])*)( *)")
+
+
+def cell_width(text):
+    """How many terminal columns `text` takes (colours ignored, emoji are 2)."""
+    w = 0
+    for ch in _ANSI_RE.sub("", text):
+        if ch in "\u200d\ufe0e\ufe0f" or unicodedata.combining(ch):
+            continue
+        w += 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+    return w
+
+
+def emit(text="", hang=None, keep=0):
+    """Print `text`, word-wrapped to the terminal if it's too wide.
+
+    Continuation lines are indented by `hang` columns (default: under the
+    first word, or under the text after a leading emoji). The first `keep`
+    characters are printed as-is, so a column of labels keeps its alignment."""
+    width = max(30, term_width() - 1)
+    if cell_width(text) <= width:
+        print(text)
+        return
+    if keep:
+        codes, lead = "", text[:keep]
+        words = [w for w in text[keep:].split(" ") if w]
+        hang = keep if hang is None else hang
+    else:
+        m = _LEAD_RE.match(text)
+        codes, lead = m.group(1), m.group(2)
+        words = [w for w in text[m.end():].split(" ") if w]
+    if hang is None:
+        hang = len(lead)
+        first = _ANSI_RE.sub("", words[0]) if words else ""
+        if first and not any(c.isalnum() for c in first) and cell_width(first) <= 3:
+            hang += cell_width(first) + 1
+    hang = min(hang, width // 2)
+    lines, cur, cur_w = [], codes + lead, len(lead)
+    fresh = True
+    for word in words:
+        w = cell_width(word)
+        if not fresh and cur_w + 1 + w > width:
+            lines.append(cur)
+            cur, cur_w, fresh = " " * hang, hang, True
+        if fresh:
+            cur, cur_w, fresh = cur + word, cur_w + w, False
+        else:
+            cur, cur_w = cur + " " + word, cur_w + 1 + w
+    lines.append(cur)
+    print("\n".join(lines))
+
+
+# Animations can be skipped (press Enter) or sped up (the `fast` command).
+_ANIM = {"skip": False, "armed": False, "fast": False}
+FAST_FACTOR = 0.35
+
+
+def pause(sec):
+    """Sleep for an animation beat, unless the player has skipped ahead."""
+    if _ANIM["skip"]:
+        return
+    if _ANIM["fast"]:
+        sec *= FAST_FACTOR
+    if _ANIM["armed"]:
+        try:
+            if select.select([sys.stdin], [], [], sec)[0]:
+                _ANIM["skip"] = True
+            return
+        except (OSError, ValueError):
+            pass
+    time.sleep(sec)
+
+
+@contextlib.contextmanager
+def skippable():
+    """While the show plays, Enter skips to the end. Keys aren't echoed (so the
+    wheel isn't scribbled on) and are thrown away afterwards (so an extra
+    Enter can't start another spin)."""
+    _ANIM["skip"] = False
+    fd, old = None, None
+    if termios is not None and sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            quiet = termios.tcgetattr(fd)
+            quiet[3] &= ~termios.ECHO
+            termios.tcsetattr(fd, termios.TCSANOW, quiet)
+            _ANIM["armed"] = True
+        except (termios.error, OSError, ValueError):
+            fd = None
+    try:
+        yield
+    finally:
+        _ANIM["armed"] = False
+        _ANIM["skip"] = False
+        if fd is not None:
+            try:
+                termios.tcflush(fd, termios.TCIFLUSH)
+                termios.tcsetattr(fd, termios.TCSANOW, old)
+            except (termios.error, OSError):
+                pass
+
+
 def label(cmd, width):
     """One-line display label for a command (truncate if needed)."""
     cmd = cmd.replace("\n", " ")
@@ -591,9 +704,9 @@ def spin(commands, style, *, frames=55, window=7, keep_wheel=False, color_of=Non
             out.write(("\n").join(l + CLEAR_LINE for l in lines))
             out.write("\n")
             out.flush()
-            time.sleep(delays[f])
+            pause(delays[f])
         if not keep_wheel:
-            time.sleep(0.4)                       # let the landing register
+            pause(0.4)                       # let the landing register
             out.write(f"\033[{block_lines}A")     # back to the top of the box
             out.write("\033[J")                   # erase the box (and below)
             out.flush()
@@ -641,36 +754,36 @@ def russian_roulette(style, dry_run):
     """The russian slot: move every file and folder in the current dir to the trash."""
     entries = _list_entries()
     print()
-    print(style.red("  ☠  R U S S I A N   R O U L E T T E  ☠"))
-    print(style.dim("  Chamber: " + os.getcwd()))
+    emit(style.red("  ☠  R U S S I A N   R O U L E T T E  ☠"))
+    emit(style.dim("  Chamber: " + os.getcwd()))
     print()
 
     if not entries:
-        print(style.green("  This directory is empty — *click*. You live."))
+        emit(style.green("  This directory is empty — *click*. You live."))
         return 0
 
-    print(style.dim("  In the chamber:"))
+    emit(style.dim("  In the chamber:"))
     for e in entries:
         tag = "/" if os.path.isdir(e) and not os.path.islink(e) else ""
         print("    - " + e + tag)
     print()
 
     if dry_run:
-        print(style.dim("  (dry run — nothing deleted)"))
+        emit(style.dim("  (dry run — nothing deleted)"))
         return 0
 
     if not sys.stdin.isatty():
-        print(style.red("  Refusing to delete without an interactive confirmation."))
+        emit(style.red("  Refusing to delete without an interactive confirmation."))
         return 1
 
-    print(style.red(f"  All {len(entries)} item(s) here will be moved to the TRASH (recoverable)."))
+    emit(style.red(f"  All {len(entries)} item(s) here will be moved to the TRASH (recoverable)."))
     try:
         ans = input("  Type 'bang' to pull the trigger (anything else = chicken out): ")
     except (EOFError, KeyboardInterrupt):
         print(style.green("\n  You chickened out. Everything is safe."))
         return 0
     if ans.strip().lower() != "bang":
-        print(style.green("  You chickened out. Everything is safe."))
+        emit(style.green("  You chickened out. Everything is safe."))
         return 0
 
     trashed, failed, where = [], [], "Trash"
@@ -683,11 +796,11 @@ def russian_roulette(style, dry_run):
 
     print()
     if trashed:
-        print(style.red(f"  💥 BANG. Trashed {len(trashed)} item(s): ")
+        emit(style.red(f"  💥 BANG. Trashed {len(trashed)} item(s): ")
               + ", ".join(trashed))
-        print(style.dim(f"  Recover from: {where}"))
+        emit(style.dim(f"  Recover from: {where}"))
     for e, exc in failed:
-        print(style.red(f"  Could not trash {e}: {exc}"))
+        emit(style.red(f"  Could not trash {e}: {exc}"))
     return 0 if not failed else 1
 
 
@@ -697,7 +810,7 @@ def run_command(cmd, style, timeout, header="  🎯 Landed on:", header_color="g
     print()
     paint = getattr(style, header_color, style.green)
     print(paint(header), style.bright(cmd))
-    print(style.dim("  " + "─" * 50))
+    emit(style.dim("  " + "─" * 50))
     print()
     sys.stdout.flush()  # ensure our header prints before the subprocess output
     try:
@@ -710,7 +823,7 @@ def run_command(cmd, style, timeout, header="  🎯 Landed on:", header_color="g
         print(style.red(f"\n  (command timed out after {timeout}s)"))
         return 124
     except FileNotFoundError:
-        print(style.red("  bash not found; cannot run the winning command."))
+        emit(style.red("  bash not found; cannot run the winning command."))
         return 127
     except KeyboardInterrupt:
         print(style.red("\n  (interrupted)"))
@@ -721,7 +834,7 @@ def show_stats(style):
     s = load_state()
     rate = (100.0 * s["wins"] / s["spins"]) if s["spins"] else 0.0
     print()
-    print(style.accent("        🎰  R O U L E T T E   —   S T A T S"))
+    emit(style.accent("        🎰  R O U L E T T E   —   S T A T S"))
     print()
     print("  Chips:        " + style.bright(f"{s['chips']} 🪙"))
     print(f"  Spins:        {s['spins']}")
@@ -750,9 +863,9 @@ def show_stats(style):
     if hist:
         print("  Recent:       " + hist)
     print()
-    print(style.dim("  Sit down:     roulette          one spin:  roulette --bet 10 --on red"))
+    emit(style.dim("  Sit down:     roulette          one spin:  roulette --bet 10 --on red"))
     if s["chips"] <= 0:
-        print(style.dim("  Flat broke?   roulette --beg"))
+        emit(style.dim("  Flat broke?   roulette --beg"))
     return 0
 
 
@@ -763,8 +876,8 @@ def beg(style, animate=True):
     state = load_state()
     print()
     if state["chips"] > 0:
-        print("  " + style.red("🙅 BEG DENIED"))
-        print("  " + random.choice(BEG_INSULTS).format(chips=state["chips"]))
+        emit("  " + style.red("🙅 BEG DENIED"))
+        emit("  " + random.choice(BEG_INSULTS).format(chips=state["chips"]))
         return 0
 
     if state["run_begs"] + 1 >= MAX_BEGS:
@@ -775,15 +888,15 @@ def beg(style, animate=True):
     state["run_begs"] += 1
     state["chips"] += 100
     pool = BEG_LINES[min(state["run_begs"], len(BEG_LINES)) - 1]
-    print("  " + style.accent("🙏 you grovel before the house…"))
-    print("  " + FLAVOR.choice(pool))
+    emit("  " + style.accent("🙏 you grovel before the house…"))
+    emit("  " + FLAVOR.choice(pool))
     print("  balance " + style.bright(f"{state['chips']} 🪙")
           + style.dim(f"    ·    bailouts this run: {state['run_begs']}/{MAX_BEGS - 1}"))
     left = MAX_BEGS - 1 - state["run_begs"]
     if left == 0:
-        print("  " + style.red("⚠️  Security is watching. Beg once more and you're out."))
+        emit("  " + style.red("⚠️  Security is watching. Beg once more and you're out."))
     else:
-        print("  " + style.dim(f"  The house is counting: {left} more bailout"
+        emit("  " + style.dim(f"  The house is counting: {left} more bailout"
                                f"{'s' if left != 1 else ''} before security gets involved."))
     save_state(state)
     return 0
@@ -845,29 +958,29 @@ GAME_OVER_EPITAPHS = [
 def kicked_out(style, state, animate=True):
     """One beg too many: security throws you out, the run is lost and the game
     starts over (lifetime stats are kept)."""
-    print("  " + style.accent("🙏 you grovel before the house… again…"))
+    emit("  " + style.accent("🙏 you grovel before the house… again…"))
     sys.stdout.flush()
     if animate:
-        time.sleep(1.0)
+        pause(1.0)
     print()
-    print("  " + style.red("🚪  K I C K E D   O U T  🚪"))
+    emit("  " + style.red("🚪  K I C K E D   O U T  🚪"))
     for line in FLAVOR.choice(KICKED_OUT_SCENES):
-        print("  " + style.red(fx(line)))
+        emit("  " + style.red(fx(line)))
         sys.stdout.flush()
         if animate:
-            time.sleep(0.9)
+            pause(0.9)
     print()
-    print("  " + style.bright("💀  G A M E   O V E R  💀"))
-    print("  " + style.dim(f"run #{state['run']}  ·  {state['run_spins']} spins  ·  "
+    emit("  " + style.bright("💀  G A M E   O V E R  💀"))
+    emit("  " + style.dim(f"run #{state['run']}  ·  {state['run_spins']} spins  ·  "
                            f"begged {MAX_BEGS} times  ·  thrown out of the casino"))
-    print("  " + style.dim(FLAVOR.choice(GAME_OVER_EPITAPHS)))
+    emit("  " + style.dim(FLAVOR.choice(GAME_OVER_EPITAPHS)))
     state["kicked_out"] += 1
     restock_run(state)
     save_state(state)
     if animate:
-        time.sleep(1.2)
+        pause(1.2)
     print()
-    print(style.dim(f"  You sneak back in through a different door. Run #{state['run']} "
+    emit(style.dim(f"  You sneak back in through a different door. Run #{state['run']} "
                     f"starts with {STARTING_CHIPS} 🪙."))
     croak(style, "Good evening. I'm {name}. I don't believe we've met. Let's keep it that way.")
 
@@ -891,7 +1004,7 @@ def settle_bet(style, winner, bet, target):
                  else style.bright(target.upper()))
 
     print()
-    print("  " + style.accent("━━ BET RESULT ━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+    emit("  " + style.accent("━━ BET RESULT ━━━━━━━━━━━━━━━━━━━━━━━━━━"))
     print(f"  landed on {pocket}    ·    you bet {bet_label}")
 
     if won:
@@ -904,17 +1017,17 @@ def settle_bet(style, winner, bet, target):
         state["best_streak"] = max(state["best_streak"], state["streak"])
         state["biggest_win"] = max(state["biggest_win"], profit)
         flair = style.bright(f"  🔥 streak x{state['streak']}") if streak_bonus else ""
-        print(style.green(f"  ✅ YOU WIN  +{profit} 🪙") + flair
+        emit(style.green(f"  ✅ YOU WIN  +{profit} 🪙") + flair
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
     else:
         state["chips"] -= bet
         state["losses"] += 1
         state["streak"] = 0
-        print(style.red(f"  ❌ YOU LOSE  -{bet} 🪙")
+        emit(style.red(f"  ❌ YOU LOSE  -{bet} 🪙")
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
 
     if state["chips"] <= 0:
-        print(style.dim("  Out of chips — beg for more: roulette --beg"))
+        emit(style.dim("  Out of chips — beg for more: roulette --beg"))
     save_state(state)
     return 0
 
@@ -938,7 +1051,7 @@ def _flash_wheel(style, final, cycles=16):
             c = "red" if i % 2 == 0 else "black"
             out.write("\r  " + style.slot(c, "█" * width))
             out.flush()
-            time.sleep(0.03 + (i / cycles) * 0.14)
+            pause(0.03 + (i / cycles) * 0.14)
         out.write("\r  " + style.slot(final, "█" * width) + CLEAR_LINE + "\n")
         out.flush()
     finally:
@@ -949,8 +1062,8 @@ def _flash_wheel(style, final, cycles=16):
 def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
     """Wildcard pocket: run the entropy command and turn its output into a color."""
     print()
-    print("  " + style.accent("✨✨  S U P E R   S P I N  ✨✨"))
-    print(style.dim("  " + label.replace("✨ ", "")))
+    emit("  " + style.accent("✨✨  S U P E R   S P I N  ✨✨"))
+    emit(style.dim("  " + label.replace("✨ ", "")))
     print()
     sys.stdout.flush()
     try:
@@ -963,10 +1076,10 @@ def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
     parity = "even" if n % 2 == 0 else "odd"
     print(f"  🔢 the wheel conjures  {style.bright(raw[:40])}  →  {n} is {parity}")
     _flash_wheel(style, color)
-    print("  " + style.slot(color, f"  ◉   {color.upper()}   WINS   ◉  "))
+    emit("  " + style.slot(color, f"  ◉   {color.upper()}   WINS   ◉  "))
 
     if bet is None:
-        print(style.dim(f"  (no bet — {color.upper()} takes the round)"))
+        emit(style.dim(f"  (no bet — {color.upper()} takes the round)"))
         return 0
 
     # Settle the bet against the derived color (super spins are red/black only).
@@ -983,7 +1096,7 @@ def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
         state["best_streak"] = max(state["best_streak"], state["streak"])
         state["biggest_win"] = max(state["biggest_win"], profit)
         flair = style.bright(f"  🔥 streak x{state['streak']}") if bonus else ""
-        print(style.green(f"  ✅ YOU WIN  +{profit} 🪙") + flair
+        emit(style.green(f"  ✅ YOU WIN  +{profit} 🪙") + flair
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
     else:
         state["chips"] -= bet
@@ -991,10 +1104,10 @@ def super_spin(style, label, entropy_cmd, bet=None, target="red", timeout=15):
         state["streak"] = 0
         note = "" if target in ("red", "black") else style.dim(
             f"  (a super spin only pays red/black, not {target})")
-        print(style.red(f"  ❌ YOU LOSE  -{bet} 🪙") + note
+        emit(style.red(f"  ❌ YOU LOSE  -{bet} 🪙") + note
               + "    →    balance " + style.bright(f"{state['chips']} 🪙"))
     if state["chips"] <= 0:
-        print(style.dim("  Out of chips — beg for more: roulette --beg"))
+        emit(style.dim("  Out of chips — beg for more: roulette --beg"))
     save_state(state)
     return 0
 
@@ -1141,32 +1254,38 @@ def pocket_text(style, n, width=4):
 def render_table(style):
     """The felt: 0 on the left, 3 rows of 12, then dozens and even-money boxes."""
     lines = []
+    cw = 4 if term_width() >= 72 else 3  # narrow terminals get a compact felt
     rows = [range(3, 37, 3), range(2, 37, 3), range(1, 37, 3)]
     for i, row in enumerate(rows):
         zero = style.pocket("green", "  0  " if i == 1 else "     ")
-        cells = "".join(style.pocket(number_color(n), f"{n:^4}") for n in row)
-        lines.append("  " + zero + "│" + cells + "│ " + style.dim(f"col{3 - i} 2:1"))
+        cells = "".join(style.pocket(number_color(n), f"{n:^{cw}}") for n in row)
+        lines.append("  " + zero + "│" + cells + "│ "
+                     + style.dim(f"col{3 - i}" + (" 2:1" if cw == 4 else "")))
     pad = "  " + " " * 5 + " "
-    lines.append(pad + "".join(style.dim(f"{d:^16}") for d in ("1st 12 · d1", "2nd 12 · d2", "3rd 12 · d3")))
+    dozens = ("1st 12 · d1", "2nd 12 · d2", "3rd 12 · d3") if cw == 4 else ("d1", "d2", "d3")
+    lines.append(pad + "".join(style.dim(f"{d:^{cw * 4}}") for d in dozens))
     evens = [("1-18", None), ("EVEN", None), ("RED", "red"), ("BLACK", "black"),
              ("ODD", None), ("19-36", None)]
-    lines.append(pad + "".join(style.pocket(c, f"{t:^8}") if c else style.dim(f"{t:^8}")
-                                for t, c in evens))
+    lines.append(pad + "".join(style.pocket(c, f"{t:^{cw * 2}}") if c
+                                else style.dim(f"{t:^{cw * 2}}") for t, c in evens))
     return lines
 
 
-def print_table(style):
+def print_table(style, brief=False):
     print()
     for line in render_table(style):
         print(line)
     print()
-    print(BET_HELP)
+    if brief:
+        return
+    for line in BET_HELP.splitlines():
+        emit(line, keep=12)
     print()
-    print("  " + style.pocket("green", " 0 ") + style.accent(" = SUPER SPIN")
+    emit("  " + style.pocket("green", " 0 ") + style.accent(" = SUPER SPIN")
           + style.dim(" — bets on 0 pay 36:1, every other bet rides a re-spin on 1–36."))
-    print(style.dim("  Every bet has an expected value of exactly zero.  House edge: ")
+    emit(style.dim("  Every bet has an expected value of exactly zero.  House edge: ")
           + style.bright("0.00%"))
-    print(style.dim("  (Your croupier, on the other hand, can be bribed.)"))
+    emit(style.dim("  (Your croupier, on the other hand, can be bribed.)"))
 
 
 def wheel_spin(style, order, result, *, frames=62):
@@ -1203,19 +1322,21 @@ def wheel_spin(style, order, result, *, frames=62):
     out.write(HIDE_CURSOR)
     try:
         for f in range(frames):
+            if _ANIM["skip"] and 0 < f < frames - 1:
+                continue
             lines = render(start + f, landed=(f == frames - 1))
             if f:
                 out.write(f"\033[{len(lines)}A")
             out.write("\r" + "\n".join(l + CLEAR_LINE for l in lines) + "\n")
             out.flush()
-            time.sleep(delays[f])
+            pause(delays[f])
     finally:
         out.write(SHOW_CURSOR)
         out.flush()
 
 
 def announce(style, n, prefix="🎯"):
-    print("  " + prefix + "  " + style.pocket(number_color(n), f"  {n}  ")
+    emit("  " + prefix + "  " + style.pocket(number_color(n), f"  {n}  ")
           + "  " + style.bright(describe_number(n)))
 
 
@@ -1229,9 +1350,11 @@ def _flash_felt(style, cycles=18):
     out.write(HIDE_CURSOR)
     try:
         for i in range(cycles):
+            if _ANIM["skip"]:
+                break
             out.write("\r  " + style.pocket(colors[i % 3], " " * width))
             out.flush()
-            time.sleep(0.03 + (i / cycles) * 0.12)
+            pause(0.03 + (i / cycles) * 0.12)
         out.write("\r" + CLEAR_LINE)
         out.flush()
     finally:
@@ -1968,7 +2091,9 @@ def say(style, key, chance=1.0, **kw):
 
 
 def croak(style, text, **kw):
-    print("  " + style.accent(fx("🎩 {name}:")) + " " + fx(text, **kw))
+    who = fx("🎩 {name}:")
+    hang = 2 + cell_width(who) + 1
+    emit("  " + style.accent(who) + " " + fx(text, **kw), hang=hang if hang <= 24 else 4)
 
 
 def bet_quip(style, bet, chips, free):
@@ -1996,12 +2121,12 @@ def ball_misbehaves(style, animate):
     if FLAVOR.randrange(MISBEHAVE_ODDS):
         return False
     print()
-    print("  " + style.red("⚠  BALL ESCAPE  ⚠"))
+    emit("  " + style.red("⚠  BALL ESCAPE  ⚠"))
     for line in FLAVOR.choice(MISBEHAVIOURS):
-        print("  " + style.dim(fx(line)))
+        emit("  " + style.dim(fx(line)))
         sys.stdout.flush()
         if animate:
-            time.sleep(0.8)
+            pause(0.8)
     return True
 
 
@@ -2312,12 +2437,12 @@ def rare_event(style, state, animate):
     if state is not None:
         save_state(state)
     print()
-    print("  " + style.accent("🎪  M E A N W H I L E …"))
+    emit("  " + style.accent("🎪  M E A N W H I L E …"))
     for line in RARE_EVENTS[pick]:
-        print("  " + style.dim(fx(line)))
+        emit("  " + style.dim(fx(line)))
         sys.stdout.flush()
         if animate:
-            time.sleep(0.9)
+            pause(0.9)
     return True
 
 
@@ -2334,8 +2459,8 @@ def leave_table(style, state):
         mood = "even"
     else:
         mood = "down"
-    print(style.dim(f"  You leave the table with {chips} 🪙."))
-    print("  " + fx(FLAVOR.choice(EXIT_LINES[mood]), chips=chips, gap=GOAL - chips,
+    emit(style.dim(f"  You leave the table with {chips} 🪙."))
+    emit("  " + fx(FLAVOR.choice(EXIT_LINES[mood]), chips=chips, gap=GOAL - chips,
                     up=chips - STARTING_CHIPS, down=STARTING_CHIPS - chips))
     who = "honest" if state["honest"] else "friend" if luck(state) > 0 else \
         "spite" if luck(state) < 0 else ""
@@ -2398,11 +2523,13 @@ def fireworks(style, animate, bursts=5):
     out.write(HIDE_CURSOR)
     try:
         for t in range(total):
+            if t and _ANIM["skip"]:
+                break
             if t:
                 out.write(f"\033[{rows}A")
             out.write("\r" + "\n".join(l + CLEAR_LINE for l in frame(t)) + "\n")
             out.flush()
-            time.sleep(0.11)
+            pause(0.11)
         out.write(f"\033[{rows}A\033[J")
     finally:
         out.write(SHOW_CURSOR)
@@ -2434,7 +2561,7 @@ def tip_croupier(style, state, amount, free=None):
         say(style, "tip_zero")
         state["tip_pending"] += ZERO_TIP_PENALTY
         clamp_tips(state)
-        print("  " + style.red(luck_text(state)))
+        emit("  " + style.red(luck_text(state)))
         save_state(state)
         return True
     was_maxed = help_chance(state) >= HELP_MAX
@@ -2449,7 +2576,7 @@ def tip_croupier(style, state, amount, free=None):
         key = "tip_everything" if state["chips"] <= 0 else \
             [k for threshold, k in TIP_TIERS if amount >= threshold][-1]
         say(style, key, amount=amount)
-    print("  " + style.green(luck_text(state)))
+    emit("  " + style.green(luck_text(state)))
     save_state(state)
     return True
 
@@ -2541,9 +2668,9 @@ def pray(style, state):
         mood = "blessed"
     else:
         mood = "plain"
-    print("  " + style.dim("🙏 You clasp your hands and pray to the roulette gods…"))
+    emit("  " + style.dim("🙏 You clasp your hands and pray to the roulette gods…"))
     sys.stdout.flush()
-    print("  " + style.accent("⚡ ") + fx(FLAVOR.choice(PRAYERS[mood])))
+    emit("  " + style.accent("⚡ ") + fx(FLAVOR.choice(PRAYERS[mood])))
     if FLAVOR.random() < 0.4:
         croak(style, FLAVOR.choice(PRAYER_CROUPIER))
     save_state(state)
@@ -2561,16 +2688,16 @@ def swap_table(style, state):
                      "({n} more spin{s} before you can change tables)",
               n=state["heat"], s="s" if state["heat"] != 1 else "")
         return False
-    print("  " + style.dim(fx("You gather your chips and wave goodbye to {name}.")))
-    print("  " + style.dim("🚶 You move to another table…"))
+    emit("  " + style.dim(fx("You gather your chips and wave goodbye to {name}.")))
+    emit("  " + style.dim("🚶 You move to another table…"))
     replace_dealer(state)
     state["honest"] = 0
     state["tip_log"], state["tip_pending"] = [], 0
     save_state(state)
     croak(style, "Good evening. I'm {name}, and I'll be your croupier this run.")
-    print("  " + style.dim(luck_text(state) + " — a fresh start"))
+    emit("  " + style.dim(luck_text(state) + " — a fresh start"))
     if state["run_caught"]:
-        print("  " + style.red(f"👀 The pit boss follows you over. Rigged spins are still "
+        emit("  " + style.red(f"👀 The pit boss follows you over. Rigged spins are still "
                                f"{2 ** state['run_caught']}× likelier to be spotted this run."))
     return True
 
@@ -2662,33 +2789,34 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
         pattern_before(style, history_before, bets)
     rare_event(style, state if not dry_run else None, animate)
     if animate:
-        print(style.dim("  no more bets… the ball is rolling"))
+        emit(style.dim("  no more bets… the ball is rolling"
+                        + ("   (Enter skips)" if _ANIM["armed"] else "")))
     if ball_misbehaves(style, animate) and animate:
-        print(style.dim("  …the ball is rolling (again)"))
+        emit(style.dim("  …the ball is rolling (again)"))
     if animate:
         wheel_spin(style, WHEEL_ORDER, first)
     announce(style, first)
 
     if first == 0:
         print()
-        print("  " + style.accent("✨✨  Z E R O  —  S U P E R   S P I N  ✨✨"))
+        emit("  " + style.accent("✨✨  Z E R O  —  S U P E R   S P I N  ✨✨"))
         say(style, "zero_spin", 0.8)
         zero_hits = [(b, p) for b, w, p in results if 0 in b["numbers"]]
         for b, p in zero_hits:
-            print("  " + style.green(f"✅ {b['label']} hits — pays 36:1  (+{p} 🪙)"))
+            emit("  " + style.green(f"✅ {b['label']} hits — pays 36:1  (+{p} 🪙)"))
         if animate:
             _flash_felt(style)
-        print(style.dim("  the zero vanishes — every other bet rides a re-spin on 1–36"))
+        emit(style.dim("  the zero vanishes — every other bet rides a re-spin on 1–36"))
         if animate:
             wheel_spin(style, SUPER_WHEEL_ORDER, second, frames=48)
         announce(style, second, prefix="✨")
 
     if rig and rig["spite"]:
         say(style, "spite")
-        print("  " + style.red(fx("🍀 spoiled by {name}")))
+        emit("  " + style.red(fx("🍀 spoiled by {name}")))
     elif rig and not rig["caught"]:
         say(style, "rigged")
-        print("  " + style.green(fx("🍀 rigged by {name}")))
+        emit("  " + style.green(fx("🍀 rigged by {name}")))
     if rig and rig["caught"]:
         pit_boss(style, animate, pocket_lost, state["run_caught"])
 
@@ -2697,11 +2825,11 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
         print()
         fireworks(style, animate)
         for b in straights:
-            print("  " + style.bright(f"🎆  STRAIGHT UP!  {b['label']} pays {b['payout']}:1  🎆"))
+            emit("  " + style.bright(f"🎆  STRAIGHT UP!  {b['label']} pays {b['payout']}:1  🎆"))
 
     if bets:
         print()
-        print("  " + style.accent("━━ PAYOUTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+        emit("  " + style.accent("━━ PAYOUTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
         for b, won, p in results:
             mark = "✅" if won else "❌"
             amount = style.green(f"+{p}") if won else style.red(f"{p}")
@@ -2724,9 +2852,9 @@ def play_round(style, bets, *, animate, dry_run=False, state=None):
         if live:
             pattern_after(style, shown["history"])
         if dry_run:
-            print(style.dim("  (dry run — no chips moved)"))
+            emit(style.dim("  (dry run — no chips moved)"))
         elif state is not None and state["chips"] <= 0:
-            print(style.dim("  Out of chips — beg for more: roulette --beg"))
+            emit(style.dim("  Out of chips — beg for more: roulette --beg"))
 
     set_dealer(new_dealer)
     if rig and rig["caught"]:
@@ -2760,15 +2888,15 @@ def restock_run(state):
 
 def pit_boss(style, animate, pocket_lost, busts=1):
     print()
-    print("  " + style.red("🚨  C A U G H T  🚨"))
+    emit("  " + style.red("🚨  C A U G H T  🚨"))
     for line in FLAVOR.choice(PIT_BOSS_SCENES):
-        print("  " + style.red(fx(line)))
+        emit("  " + style.red(fx(line)))
         sys.stdout.flush()
         if animate:
-            time.sleep(0.8)
-    print("  " + style.dim(fx("{name} is escorted out, along with your {pocket} 🪙 of recent tips.",
+            pause(0.8)
+    emit("  " + style.dim(fx("{name} is escorted out, along with your {pocket} 🪙 of recent tips.",
                               pocket=pocket_lost)))
-    print("  " + style.red(f"👀 The pit boss knows your face now: rigged spins are "
+    emit("  " + style.red(f"👀 The pit boss knows your face now: rigged spins are "
                            f"{2 ** busts}× likelier to be spotted for the rest of this run."))
 
 
@@ -2776,51 +2904,75 @@ def victory(style, run, accomplice, animate):
     """The run is won: you broke the bank."""
     print()
     fireworks(style, animate, bursts=8)
-    print("  " + style.bright("🏦💥  Y O U   B R O K E   T H E   B A N K  💥🏦"))
+    emit("  " + style.bright("🏦💥  Y O U   B R O K E   T H E   B A N K  💥🏦"))
     bits = [f"run #{run['run']}", f"{run['run_spins']} spins",
             f"{run['run_begs']} beg{'s' if run['run_begs'] != 1 else ''}"]
     if run["run_tipped"]:
         bits.append(f"{run['run_tipped']} 🪙 in bribes")
     if run["run_rigs"]:
         bits.append(f"{run['run_rigs']} rigged spin{'s' if run['run_rigs'] != 1 else ''}")
-    print("  " + style.dim("  ·  ".join(bits)))
+    emit("  " + style.dim("  ·  ".join(bits)))
     if run["run_rigs"] and not run["honest"]:
         saved = dict(DEALER)
         set_dealer(accomplice)
         say(style, "victory")
         set_dealer(saved)
     elif run["run_begs"]:
-        print("  " + style.dim("From the beg wall to the vault. Inspirational."))
+        emit("  " + style.dim("From the beg wall to the vault. Inspirational."))
     print()
-    print(style.dim(f"  The house restocks the table. Run #{run['run'] + 1} starts with "
+    emit(style.dim(f"  The house restocks the table. Run #{run['run'] + 1} starts with "
                     f"{STARTING_CHIPS} 🪙."))
     croak(style, "Good evening. I'm {name}, and I'll be your croupier this run.")
 
 
 INTERACTIVE_HELP_TEMPLATE = """\
-  place a bet:   <target> <chips> or <chips> <target>   e.g.  red 10   10 red   d2 20
-                 numbers too: 2 90 or 90 2 — if it's unclear, say  5 on 17
-                 'all' bets everything you have left, e.g.  black all
-  spin           spin the wheel (or just press Enter; with no bets it's a free spin)
-  rebet          put your last bets back on the table
-  bets / undo / clear      show, take back the last, or pick up all your chips
-  table          show the felt and every payout
-  stats          bankroll and record                   history   recent numbers
-  tip [chips]    slip the croupier some chips. Each chip is 🍀 +{per}% luck (max
-                 {maxp}%): the chance they rig a losing spin your way. It fades
-                 a little every spin and is gone after {window}. Tip 0 and
-                 your luck goes DOWN. Get
-                 caught by the pit boss and you lose the bet, and an honest
-                 croupier takes over.
-  swap_table     move to another table with a new croupier (luck resets to 0)
-  pray           pray to the roulette gods (they have opinions, not powers)
-  quit           leave the table
-  beg            go broke and you can beg the house for 100 more — but beg
-                 a third time in one run and you're thrown out (game over)"""
+  BETTING
+  red 10  10 red     put chips on a target, in either order (d2 20, 17/18 5…)
+  5 on 17            say 'on' when two numbers could be read either way
+  black all          bet everything you have left
+  Enter  or  spin    spin the wheel (no bets: a free spin, no chips move)
+  rebet              put your last bets back on the table
+  bets  undo  clear  show your bets, take back the last one, or pick them up
+  table              show the felt and every payout
+
+  THE CROUPIER
+  tip [chips]        each chip is 🍀 +{per}% luck (max {maxp}%): the chance a
+                     losing spin gets rigged your way. It fades every spin and
+                     is gone after {window}. Tip 0 and your luck goes DOWN. If the
+                     pit boss catches a rig, you lose the bet and an honest
+                     croupier takes over.
+  swap_table         move to a new table and croupier (luck resets to 0)
+  pray               ask the roulette gods (they have opinions, not powers)
+
+  EVERYTHING ELSE
+  stats  history     your bankroll and record, or the recent numbers
+  beg                broke? The house spots you 100 🪙, {bailouts} per run. Beg
+                     once more after that and you're thrown out (game over).
+  fast               quicker spins on/off (Enter also skips any spin)
+  help               show this list again
+  quit               leave the table"""
+HELP_HANG = 21
+SHORT_HELP = "  Bet like  red 10  or  5 on 17, press Enter to spin, or type  help."
 
 
 INTERACTIVE_HELP = INTERACTIVE_HELP_TEMPLATE.format(
-    window=TIP_WINDOW, per=f"{HELP_PER_CHIP * 100:g}", maxp=int(HELP_MAX * 100))
+    window=TIP_WINDOW, per=f"{HELP_PER_CHIP * 100:g}", maxp=int(HELP_MAX * 100),
+    bailouts={1: "once", 2: "twice"}.get(MAX_BEGS - 1, f"{MAX_BEGS - 1} times"))
+
+
+def print_help():
+    for line in INTERACTIVE_HELP.splitlines():
+        emit(line, keep=HELP_HANG)
+
+
+# Words the table understands, for "did you mean…?"
+TABLE_COMMANDS = ("spin", "rebet", "bets", "undo", "clear", "table", "stats", "history",
+                  "tip", "swap_table", "pray", "beg", "fast", "help", "quit")
+
+
+def did_you_mean(word, choices):
+    match = difflib.get_close_matches(word, choices, n=1, cutoff=0.7)
+    return match[0] if match else None
 
 BET_USAGE = "bet as  <target> <chips>  or  <chips> <target>,  e.g.  red 10   10 red   5 on 17"
 
@@ -2888,21 +3040,30 @@ def interactive(style, *, animate=True):
     state = load_state()
     bets, last = [], []
     print()
-    print(style.accent("        🎰  R O U L E T T E  🎰"))
-    print(style.dim("        a fair table — the house has no edge"))
-    if state["chips"] <= 0:
-        print(style.red("        you're flat broke"))
+    emit(style.accent("        🎰  R O U L E T T E  🎰"))
+    emit(style.dim("        a fair table — the house has no edge"))
+    if state["chips"] <= 0 and state["run_begs"] >= MAX_BEGS - 1:
+        emit(style.red("        you're flat broke, and one more beg gets you thrown out"))
+    elif state["chips"] <= 0:
+        emit(style.red("        you're flat broke"))
     else:
-        print(style.dim(f"        you have {state['chips']} 🪙"))
-    print(style.dim(f"        goal: break the bank at {GOAL:,} 🪙  ·  run #{state['run']}"))
+        emit(style.dim(f"        you have {state['chips']} 🪙"))
+    emit(style.dim(f"        goal: break the bank at {GOAL:,} 🪙  ·  run #{state['run']}"))
     if state["honest"]:
         print(style.dim(fx("        🎩 {name} is your croupier — honest, and watching you")))
     else:
         print(style.dim(fx("        🎩 {name} is your croupier this run "
                            "({he} accepts tips… and favours)")))
-    print_table(style)
-    print()
-    print(INTERACTIVE_HELP)
+    _ANIM["fast"] = bool(state["fast"])
+    if state["seen_help"]:
+        print_table(style, brief=True)
+        emit(style.dim(SHORT_HELP))
+    else:
+        print_table(style)
+        print()
+        print_help()
+        state["seen_help"] = 1
+        save_state(state)
 
     while True:
         on_table = sum(b["stake"] for b in bets)
@@ -2922,20 +3083,28 @@ def interactive(style, *, animate=True):
             leave_table(style, state)
             return 0
         if cmd in ("h", "help", "?"):
-            print(INTERACTIVE_HELP)
+            print_help()
+            continue
+        if cmd in ("fast", "slow"):
+            state["fast"] = 0 if (state["fast"] or cmd == "slow") else 1
+            _ANIM["fast"] = bool(state["fast"])
+            save_state(state)
+            emit(style.dim(fx("  ⏩ Fast spins on. {name} spins with a little less flourish.")
+                           if state["fast"] else "  🐢 Fast spins off. The full show is back."))
             continue
         if cmd in ("t", "table"):
             print_table(style)
             continue
         if cmd == "history":
             hist = format_history(style, state["history"], HISTORY_LEN)
-            print("  " + (hist or style.dim("no spins yet")))
+            emit("  " + (hist or style.dim("no spins yet")))
             continue
         if cmd == "stats":
             show_stats(style)
             continue
         if cmd == "beg":
-            beg(style, animate=animate)
+            with skippable():
+                beg(style, animate=animate)
             state = load_state()
             continue
         if cmd in ("pray", "pray to the gods", "pray to the roulette gods"):
@@ -2950,56 +3119,68 @@ def interactive(style, *, animate=True):
             try:
                 amount = free if arg in ("all", "max") else int(arg)
             except ValueError:
-                print(style.red("  tip as  tip <chips>,  e.g.  tip 5"))
+                emit(style.red("  tip as  tip <chips>,  e.g.  tip 5"))
                 continue
             tip_croupier(style, state, amount, free)
             continue
         if cmd in ("b", "bets"):
             if not bets:
-                print(style.dim("  no bets on the table"))
+                emit(style.dim("  no bets on the table"))
             for b in bets:
                 print(f"  • {b['label']:<18} {b['stake']:>6} 🪙  pays {b['payout']}:1")
             continue
         if cmd in ("u", "undo"):
             if bets:
                 b = bets.pop()
-                print(style.dim(f"  picked up {b['stake']} 🪙 from {b['label']}"))
+                emit(style.dim(f"  picked up {b['stake']} 🪙 from {b['label']}"))
             continue
         if cmd in ("c", "clear"):
             bets = []
-            print(style.dim("  you pick up your chips"))
+            emit(style.dim("  you pick up your chips"))
             continue
         if cmd in ("r", "rebet", "again"):
             if not last:
-                print(style.dim("  nothing to repeat yet — place a bet first, e.g.  red 10"))
+                emit(style.dim("  nothing to repeat yet — place a bet first, e.g.  red 10"))
                 continue
             if sum(b["stake"] for b in last) > free:
-                print(style.dim("  not enough chips to repeat your last bets"))
+                emit(style.dim("  not enough chips to repeat your last bets"))
                 continue
             for b in last:
                 _add_bet(bets, dict(b))
-            print(style.dim("  re-betting: " + ", ".join(
+            emit(style.dim("  re-betting: " + ", ".join(
                 f"{b['stake']} on {b['label']}" for b in last) + "  (Enter to spin)"))
             continue
         if cmd in ("", "s", "spin", "go"):
             if not bets:
                 # A free spin: just watch the wheel. No chips, stats or history.
-                play_round(style, [], animate=animate, dry_run=True)
-                print(style.dim("  (free spin — no bets on the table, no chips moved)"))
+                with skippable():
+                    play_round(style, [], animate=animate, dry_run=True)
+                emit(style.dim("  (free spin — no bets on the table, no chips moved)"))
                 continue
-            play_round(style, bets, animate=animate, state=state)
+            with skippable():
+                play_round(style, bets, animate=animate, state=state)
             last, bets = [dict(b) for b in bets], []
             hist = format_history(style, state["history"])
             if hist:
-                print(style.dim("  recent: ") + hist)
+                emit(style.dim("  recent: ") + hist)
+            continue
+        if not any(ch.isdigit() for ch in cmd) and not {"all", "max"} & set(cmd.split()):
+            guess = did_you_mean(cmd, TABLE_COMMANDS)
+            emit(style.red(f"  '{line}' isn't something the table understands")
+                 + style.dim(f" — did you mean  {guess} ?" if guess else
+                             " — type  help  for the list"))
             continue
         try:
             bet = _parse_bet_line(line, free)
         except ValueError as exc:
-            print(style.red(f"  {exc}"))
+            msg = str(exc)
+            m = re.match(r"don't know how to bet on '(.+)'", msg)
+            guess = m and did_you_mean(m.group(1).lower(),
+                                       list(OUTSIDE_BETS) + list(BET_ALIASES))
+            emit(style.red(f"  {msg}") + (style.dim(f" — did you mean  {guess} ?") if guess else ""))
             continue
         _add_bet(bets, bet)
-        print(style.dim(f"  {bet['stake']} 🪙 on {bet['label']} (pays {bet['payout']}:1)"))
+        emit(style.dim(f"  {bet['stake']} 🪙 on {bet['label']} (pays {bet['payout']}:1)"))
         bet_quip(style, bet, state["chips"], free)
 
 
@@ -3125,7 +3306,8 @@ def casino_main(args, style):
         if interactive_ok and not args.dry_run:
             return interactive(style, animate=animate)
         # Non-interactive (or a dry run) with no bet: just spin the wheel.
-        play_round(style, [], animate=animate, dry_run=True)
+        with skippable():
+            play_round(style, [], animate=animate, dry_run=True)
         return 0
 
     try:
@@ -3142,10 +3324,11 @@ def casino_main(args, style):
     bet["stake"] = args.bet
     state = load_state()
     print()
-    print(style.accent("        🎰  R O U L E T T E  🎰"))
-    print(style.dim(f"     {args.bet} 🪙 on {bet['label']} (pays {bet['payout']}:1)"
+    emit(style.accent("        🎰  R O U L E T T E  🎰"))
+    emit(style.dim(f"     {args.bet} 🪙 on {bet['label']} (pays {bet['payout']}:1)"
                     f"  —  balance {state['chips']} 🪙"))
-    play_round(style, [bet], animate=animate, dry_run=args.dry_run, state=state)
+    with skippable():
+        play_round(style, [bet], animate=animate, dry_run=args.dry_run, state=state)
     return 0
 
 
@@ -3179,15 +3362,15 @@ def commands_main(args, style):
     is_tty = sys.stdout.isatty()
 
     print()
-    print(style.accent("        🎰  R O U L E T T E  🎰"))
+    emit(style.accent("        🎰  R O U L E T T E  🎰"))
     if betting:
-        print(style.dim(f"     betting {args.bet} 🪙 on ")
+        emit(style.dim(f"     betting {args.bet} 🪙 on ")
               + style.slot(args.on, args.on.upper())
               + style.dim(f"  —  balance {state['chips']} 🪙"))
     elif args.russian:
-        print(style.red("     ☠ russian mode — 1 slot trashes everything here ☠"))
+        emit(style.red("     ☠ russian mode — 1 slot trashes everything here ☠"))
     else:
-        print(style.dim("     every command is read-only — spin away!"))
+        emit(style.dim("     every command is read-only — spin away!"))
     print()
 
     try:
@@ -3207,18 +3390,18 @@ def commands_main(args, style):
         if winner == RUSSIAN:
             return russian_roulette(style, dry_run=True)
         if winner in _SUPER_SET:
-            print(style.accent("  ✨ Would SUPER SPIN:"), style.bright(winner))
-            print(style.dim("  (runs an entropy command and flips it to red/black)"))
+            emit(style.accent("  ✨ Would SUPER SPIN:"), style.bright(winner))
+            emit(style.dim("  (runs an entropy command and flips it to red/black)"))
             return 0
-        print(style.green("  🎯 Would run:"), style.bright(winner))
+        emit(style.green("  🎯 Would run:"), style.bright(winner))
         if betting:
             if args.on in ("red", "black") and slot_color(winner) == "green":
                 verdict = "get a SECOND CHANCE super spin"
             else:
                 verdict = "WIN" if resolve_bet(args.on, winner)[0] else "LOSE"
-            print(style.dim(f"  (dry run — bet on {args.on} would {verdict}; no chips moved)"))
+            emit(style.dim(f"  (dry run — bet on {args.on} would {verdict}; no chips moved)"))
         else:
-            print(style.dim("  (dry run — nothing executed)"))
+            emit(style.dim("  (dry run — nothing executed)"))
         return 0
 
     # Super-random wildcard pockets run their own entropy-driven reveal.
@@ -3232,7 +3415,7 @@ def commands_main(args, style):
         # get a second-chance super spin (no house edge on even money).
         if args.on in ("red", "black") and slot_color(winner) == "green":
             print()
-            print("  " + style.slot("green", "GREEN house pocket")
+            emit("  " + style.slot("green", "GREEN house pocket")
                   + style.dim(" — but there's no house edge here…"))
             run_command(winner, style, args.timeout,
                         header="  🎯 Your spin landed on:", header_color="accent")
@@ -3263,6 +3446,7 @@ def main(argv=None):
         print(f"Bankroll reset to {STARTING_CHIPS} 🪙.")
         return 0
     ensure_dealer(load_state())
+    _ANIM["fast"] = bool(load_state()["fast"])
     if args.stats:
         return show_stats(style)
     if args.beg:

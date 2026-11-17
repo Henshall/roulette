@@ -1,4 +1,4 @@
-.TH ROULETTE 1 "November 2026" "roulette 2.3.0" "User Commands"
+.TH ROULETTE 1 "November 2026" "roulette 2.4.0" "User Commands"
 .SH NAME
 roulette \- a zero-edge roulette table in your terminal
 .SH SYNOPSIS
@@ -20,19 +20,24 @@ The house has no edge. Landing on \fB0\fR is a \fBSUPER SPIN\fR: bets on 0 pay
 expected value of exactly zero.
 .PP
 At the table, type a target and a chip count in either order to place a bet
-(e.g. \fBred 10\fR, \fB10 red\fR, \fB17 5\fR); when two numbers could be read
-either way, say \fICHIPS\fR \fBon\fR \fITARGET\fR (e.g. \fB5 on 17\fR). Press
-Enter to spin. Enter with no bets is a free spin that moves no chips;
-\fBrebet\fR repeats
-your last bets. \fBbets\fR, \fBundo\fR, \fBclear\fR, \fBtable\fR,
-\fBhistory\fR, \fBstats\fR, \fBbeg\fR, \fBtip\fR, \fBhelp\fR and \fBquit\fR
-are also understood.
+(e.g. \fBred 10\fR, \fB10 red\fR, \fBd2 20\fR, \fBblack all\fR). When two
+numbers could be read either way, say \fICHIPS\fR \fBon\fR \fITARGET\fR (e.g.
+\fB5 on 17\fR). Press Enter to spin; Enter with no bets is a free spin that
+moves no chips, and Enter during a spin skips to the result. \fBrebet\fR
+repeats your last bets. \fBbets\fR, \fBundo\fR, \fBclear\fR, \fBtable\fR,
+\fBhistory\fR, \fBstats\fR, \fBtip\fR, \fBswap_table\fR, \fBpray\fR,
+\fBbeg\fR, \fBfast\fR (quicker spins, remembered between games), \fBhelp\fR
+and \fBquit\fR are also understood, and close misspellings get a suggestion.
+The full command list is shown on your first game; after that, \fBhelp\fR
+shows it.
 .PP
-A randomly chosen croupier (Gaston, Céleste, Lorenzo, Penelope, ...) comments on your bets and results, calls out the
-Martingale when you keep doubling after losses, and accepts tips
-(they have no effect on the odds). Roughly one spin in 200 the ball escapes
-before being re-thrown, and straight-up hits get a small fireworks show.
-None of this changes any outcome.
+A randomly chosen croupier (Gaston, Céleste, Lorenzo, Penelope, ...) comments
+on your bets and results, near misses, streaks and other patterns, calls out
+the Martingale when you keep doubling after losses, and can be bribed with
+tips (see \fBBREAKING THE BANK\fR). Roughly one spin in 200 the ball escapes
+before being re-thrown, about one spin in 50 something happens elsewhere in
+the casino, and straight-up hits get a small fireworks show. Apart from
+tipping, none of this changes any outcome.
 .SH BREAKING THE BANK
 Each run starts with 100 chips. Reach 1000 to break the bank and win the run;
 a new run then starts with 100 chips and a new croupier. On the fair wheel the

@@ -1,3 +1,20 @@
+roulette (2.4.0) unstable; urgency=medium
+
+  * Long croupier lines, scenes and events word-wrap to the terminal, with
+    continuation lines indented under the text.
+  * Press Enter during a spin to skip to the result; keys typed mid-spin are
+    not echoed and are discarded afterwards. New `fast` command for quicker
+    spins, remembered between games.
+  * Shorter startup after the first game; the help screen is regrouped and
+    fits 78 columns.
+  * "Did you mean…?" suggestions for mistyped commands and bet targets.
+  * Warning at sit-down when one more beg would get you thrown out.
+  * Compact felt on terminals narrower than 72 columns.
+  * Man page: fixed the claim that tips don't affect the odds and the
+    ambiguous `17 5` example; listed every table command.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.3.0) unstable; urgency=medium
 
   * Near misses: the croupier reacts when the ball lands one pocket away

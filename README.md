@@ -33,8 +33,16 @@ At the table, type a target and a chip count in either order — `red 10` or
 `10 red`, `2 90` or `90 2` (there's no pocket 90, so that's 90 chips on 2) —
 then press **Enter** to spin. When both readings are legal, like `5 17`, it
 asks you to say `5 on 17` or `17 on 5`. Enter with no bets is a free spin
-(just watch, no chips move); `rebet` puts your last bets back on the table. `bets`, `undo`, `clear`, `tip`,
-`table`, `history`, `stats`, `beg`, `help` and `quit` do what they say.
+(just watch, no chips move); `rebet` puts your last bets back on the table.
+`bets`, `undo`, `clear`, `tip`, `swap_table`, `pray`, `table`, `history`,
+`stats`, `beg`, `help` and `quit` do what they say, and a typo like `spinn`
+gets a "did you mean `spin`?".
+
+Spins too slow? Press **Enter** during a spin to skip to the result, or type
+`fast` for quicker spins (it's remembered between games; `fast` again turns
+it off). The full command list shows on your first game; after that the table
+just reminds you that `help` exists. Long lines wrap to fit your terminal, and
+narrow terminals get a compact felt.
 
 | Bet | Example | Pays |
 | --- | --- | --- |
@@ -257,8 +265,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.3.0/roulette_2.3.0_all.deb
-sudo apt install ./roulette_2.3.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.4.0/roulette_2.4.0_all.deb
+sudo apt install ./roulette_2.4.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -269,13 +277,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.3.0_all.deb
-sudo apt install ./dist/roulette_2.3.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.4.0_all.deb
+sudo apt install ./dist/roulette_2.4.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.3.0_all.deb`).
+`../roulette_2.4.0_all.deb`).
 </details>
 
 ### 2. From source
