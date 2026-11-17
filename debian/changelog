@@ -1,3 +1,13 @@
+roulette (2.2.0) unstable; urgency=medium
+
+  * Tips are worth half as much luck: +2.5% per chip (was +5%), still
+    capped at +30%. A zero tip now costs -2.5%. Steady tipping with 25-chip
+    bets raises the chance of breaking the bank from 10% to about 30% per
+    bankroll (was about 50%).
+  * Luck is shown to one decimal place when needed (e.g. +2.5%).
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.1.0) unstable; urgency=medium
 
   * New `pray` command (and --pray): pray to the roulette gods, who reply

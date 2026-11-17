@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -1626,21 +1626,21 @@ MISBEHAVIOURS = [
 
 # The crooked croupier remembers who tipped recently. Each chip you tip buys
 # HELP_PER_CHIP of luck, up to HELP_MAX, and fades by 1/TIP_WINDOW every betting
-# spin (a 1-chip tip: +5%, +4.5%, +4% ... gone after TIP_WINDOW spins). When
+# spin (a 1-chip tip: +2.5%, +2.25%, +2% ... gone after TIP_WINDOW spins). When
 # you're about to lose, they rig the spin your way with that chance. The pit boss notices a rig with chance (rigged
 # winnings / NOTICE_PER). Get caught: the bets are seized, your recent tips are
 # wasted, and an honest croupier runs the rest of the run.
-# Tuned so steady tipping lifts the odds of breaking the bank from 10% to ~40%,
-# while over-tipping costs more than it's worth.
+# Tuned so steady tipping with 25-chip bets lifts the odds of breaking the bank
+# from 10% to ~30%, while over-tipping costs more than it's worth.
 #
 # Tip 0 and it counts as ZERO_TIP_PENALTY chips *against* you: luck can go
 # negative, and an offended croupier then spoils winning spins with that chance.
 TIP_WINDOW = 10
-HELP_PER_CHIP = 0.05
+HELP_PER_CHIP = 0.025
 HELP_MAX = 0.30
 NOTICE_PER = 300
 PIT_BOSS_WATCH = 5      # spins you must stay at the table after a bust
-ZERO_TIP_PENALTY = -1   # each 0 tip: -5% luck
+ZERO_TIP_PENALTY = -1   # each 0 tip: -2.5% luck
 CAP_CHIPS = HELP_MAX / HELP_PER_CHIP  # tips beyond this are just gifts
 
 
@@ -1688,7 +1688,7 @@ def spite_chance(state):
 
 
 def luck_text(state):
-    return f"🍀 {luck(state) * 100:+.0f}%"
+    return f"🍀 {luck(state) * 100:+.1f}%".replace(".0%", "%")
 
 
 def log_spin_tips(state):

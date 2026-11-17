@@ -82,13 +82,13 @@ Thaddeus, Octavia, Dmitri, Séraphine, Astrid, Rodrigo and more (21 in all) — 
 have opinions about your bets, your wins and (especially) your losses.
 
 **They can also be bribed.** Croupiers remember who tipped *recently*. `tip 2`
-at the table (or `roulette --tip 2`) buys luck, shown in your prompt as `🍀 +10%`:
+at the table (or `roulette --tip 2`) buys luck, shown in your prompt as `🍀 +5%`:
 
-- **Every chip you tip is `🍀 +5%` luck**, up to **+30%** (6 chips). Luck is the
+- **Every chip you tip is `🍀 +2.5%` luck**, up to **+30%** (12 chips). Luck is the
   chance the croupier rigs a losing spin your way. When they do, the ball
   simply lands on your bet. No cut, no catch, except…
 - **Luck fades a little every spin.** A tip loses a tenth of its strength per
-  betting spin and is gone after 10: tip 4 and you'll see +20%, +18%, +16%… down
+  betting spin and is gone after 10: tip 4 and you'll see +10%, +9%, +8%… down
   to +0%. Free spins (no bet) don't count. What you see is exactly what you
   have; past +30% your tips are just gifts.
 - **The pit boss is watching.** The bigger the rigged win, the likelier they
@@ -99,21 +99,26 @@ at the table (or `roulette --tip 2`) buys luck, shown in your prompt as `🍀 +1
 - **Want someone else?** `swap_table` (or `roulette --swap-table`) moves you to
   another table with a different croupier. Your luck starts over at `🍀 +0%`.
   Right after a bust, the pit boss won't let you move for 5 spins.
-- **Tip `0` and your luck goes down** — each zero tip is `🍀 -5%`. With negative
+- **Tip `0` and your luck goes down** — each zero tip is `🍀 -2.5%`. With negative
   luck, an offended croupier spoils that share of your *winning* spins ("Oops.
   My hand slipped."). It fades over 10 spins like any tip, or tip for real to
   make amends (1 🪙 cancels one zero tip).
 
-How much it helps, measured over thousands of simulated runs:
+How much it helps, measured over 10,000 simulated runs each (betting on red,
+`swap_table` after each bust):
 
 | How you tip | Chance to break the bank |
 | --- | --- |
 | Never | 10% |
-| **1 🪙 every spin** | **~40%** |
-| 2 🪙 every spin | ~25% |
-| 3+ 🪙 every spin | under 10% (the tips cost more than the help) |
-| 1 🪙 a spin, betting 25s or single numbers | ~30–40% (the pit boss keeps big wins in check) |
-| Keep +30%, 25s on red, `swap_table` after each bust | ~42% (the best we've found) |
+| 1 🪙 every spin, betting 10s | ~5% (the tips cost more than the help) |
+| **1 🪙 every spin, betting 25s** | **~30%** |
+| 2 🪙 every spin, betting 25s | ~30% (the best we've found) |
+| 3 🪙 every spin, betting 25s | ~22% |
+| Keep +30%, betting 50s | ~30% |
+
+Those odds are for a single bankroll. With the two bailouts begging allows,
+your chance of winning a whole game is roughly 28% without tipping and about
+50% if you tip steadily and bet 25s.
 
 The wheel itself still has **no house edge**. You're the one cheating.
 
@@ -242,8 +247,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.1.0/roulette_2.1.0_all.deb
-sudo apt install ./roulette_2.1.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.2.0/roulette_2.2.0_all.deb
+sudo apt install ./roulette_2.2.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -254,13 +259,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.1.0_all.deb
-sudo apt install ./dist/roulette_2.1.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.2.0_all.deb
+sudo apt install ./dist/roulette_2.2.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.1.0_all.deb`).
+`../roulette_2.2.0_all.deb`).
 </details>
 
 ### 2. From source

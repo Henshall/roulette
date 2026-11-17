@@ -1,4 +1,4 @@
-.TH ROULETTE 1 "November 2026" "roulette 2.1.0" "User Commands"
+.TH ROULETTE 1 "November 2026" "roulette 2.2.0" "User Commands"
 .SH NAME
 roulette \- a zero-edge roulette table in your terminal
 .SH SYNOPSIS
@@ -38,12 +38,12 @@ Each run starts with 100 chips. Reach 1000 to break the bank and win the run;
 a new run then starts with 100 chips and a new croupier. On the fair wheel the
 chance of that is exactly 10%, whatever you bet.
 .PP
-The croupier can be bribed with \fBtip\fR. Each chip tipped is +5% luck, up to
+The croupier can be bribed with \fBtip\fR. Each chip tipped is +2.5% luck, up to
 30%: the chance a losing spin is rigged your way. Luck fades by a tenth of each
 tip per betting spin, so a tip is gone after 10 spins. The pit boss notices a
 rig with probability 1% per 3 chips won, doubled for every bust earlier in the
-run; if caught, your bets are seized and an honest croupier takes over. Tipping about one chip a spin raises the chance of
-breaking the bank to roughly 40%.
+run; if caught, your bets are seized and an honest croupier takes over. Tipping about one chip a spin while betting 25 chips
+raises the chance of breaking the bank to roughly 30%.
 .PP
 \fBswap_table\fR (or \fB\-\-swap\-table\fR) moves you to another table with a
 different croupier and resets your luck to zero. For 5 spins after a pit-boss
@@ -122,7 +122,7 @@ Move to another table with a different croupier; your luck starts over at zero.
 .BI \-\-tip " CHIPS"
 Tip (bribe) the croupier; see \fBBREAKING THE BANK\fR. With \fB\-\-bet\fR, the tip is
 paid before the spin. A tip of 0 is accepted, deeply resented, and lowers your
-luck by 5%; with negative luck the croupier spoils that share of winning spins.
+luck by 2.5%; with negative luck the croupier spoils that share of winning spins.
 .TP
 .B \-\-beg
 Beg the house for chips \(em the only way to earn them back. While broke the
