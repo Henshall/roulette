@@ -11,6 +11,8 @@ import time
 
 from winpty import PtyProcess
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # the CI log isn't UTF-8 by default
+
 GAME = sys.argv[1]
 PROMPT = "bet>"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
