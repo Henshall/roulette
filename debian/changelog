@@ -1,3 +1,12 @@
+roulette (2.5.0) unstable; urgency=medium
+
+  * New --spin: spin the real wheel once, just to watch. No bet, and no
+    chips, stats or history are touched; it can't be combined with --bet,
+    --tip, --command or --russian.
+  * --command is now the name for the command wheel; --commands still works.
+
+ -- Roulette Maintainer <sourcecodeholdings@protonmail.com>  Tue, 17 Nov 2026 00:00:00 +0000
+
 roulette (2.4.0) unstable; urgency=medium
 
   * Long croupier lines, scenes and events word-wrap to the terminal, with

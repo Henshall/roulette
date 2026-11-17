@@ -35,7 +35,7 @@ try:
 except ImportError:  # not on Windows
     termios = None
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.
@@ -3190,12 +3190,18 @@ def interactive(style, *, animate=True):
 def build_parser():
     p = argparse.ArgumentParser(
         prog="roulette",
-        description="A zero-edge roulette table in your terminal. "
-                    "Use --commands (or --russian) for the wheel of harmless commands.",
+        description="A zero-edge roulette table in your terminal. Use --spin to just "
+                    "watch the wheel, or --command (or --russian) for the wheel of "
+                    "shell commands.",
     )
     mode = p.add_argument_group("modes")
     mode.add_argument(
-        "--commands", action="store_true",
+        "--spin", action="store_true",
+        help="spin the real wheel once, just to watch: no bet, and no chips, stats "
+             "or history touched",
+    )
+    mode.add_argument(
+        "--command", "--commands", action="store_true", dest="commands",
         help="spin the wheel of harmless, read-only shell commands and run the winner",
     )
     mode.add_argument(
@@ -3297,6 +3303,13 @@ def casino_main(args, style):
     """The real, zero-edge roulette table."""
     if args.table:
         print_table(style)
+        return 0
+
+    if args.spin:
+        # Just watch: no bets, and no state, so nothing is saved or counted.
+        with skippable():
+            play_round(style, [], animate=sys.stdout.isatty() and not args.pick,
+                       dry_run=True)
         return 0
 
     interactive_ok = sys.stdin.isatty() and sys.stdout.isatty()
@@ -3434,7 +3447,16 @@ def commands_main(args, style):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.spin:
+        clash = [flag for flag, on in (("--bet", args.bet is not None),
+                                       ("--tip", args.tip is not None),
+                                       ("--command", args.commands),
+                                       ("--russian", args.russian)) if on]
+        if clash:
+            parser.error(f"--spin just watches the wheel; it can't be combined with "
+                         f"{', '.join(clash)}")
 
     use_color = not args.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
     style = Style(use_color)

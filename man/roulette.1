@@ -1,11 +1,13 @@
-.TH ROULETTE 1 "November 2026" "roulette 2.4.0" "User Commands"
+.TH ROULETTE 1 "November 2026" "roulette 2.5.0" "User Commands"
 .SH NAME
 roulette \- a zero-edge roulette table in your terminal
 .SH SYNOPSIS
 .B roulette
 .RI [ OPTIONS ]
 .br
-.B roulette \-\-commands
+.B roulette \-\-spin
+.br
+.B roulette \-\-command
 .RI [ OPTIONS ]
 .SH DESCRIPTION
 .B roulette
@@ -76,7 +78,7 @@ Corner, 8:1.
 .B 1-6
 Six line, 5:1.
 .SH COMMAND WHEEL
-With \fB\-\-commands\fR (or \fB\-\-russian\fR), roulette instead spins a reel
+With \fB\-\-command\fR (or \fB\-\-russian\fR), roulette instead spins a reel
 of harmless, read-only shell commands, lands on one and runs it with
 \fBbash \-c\fR. Each command is a colored pocket (red, black, a green
 "loser", or a magenta "super spin" wildcard that turns entropy into red or
@@ -85,7 +87,12 @@ red|black|green|jackpot. A red/black bet that lands on a green pocket gets a
 second-chance super spin.
 .SH OPTIONS
 .TP
-.B \-\-commands
+.B \-\-spin
+Spin the real wheel once, just to watch. There is no bet, and no chips, stats
+or history are touched. It can't be combined with \fB\-\-bet\fR, \fB\-\-tip\fR,
+\fB\-\-command\fR or \fB\-\-russian\fR.
+.TP
+.BR \-\-command ", " \-\-commands
 Spin the wheel of harmless commands instead of the roulette table.
 .TP
 .B \-\-russian
@@ -169,7 +176,7 @@ Sit down at the table.
 .B roulette \-\-bet 5 \-\-on 17
 One spin, 5 chips straight up on 17.
 .TP
-.B roulette \-\-commands
+.B roulette \-\-command
 Spin the command wheel and run the winner.
 .SH AUTHOR
 roulette contributors.

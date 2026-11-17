@@ -25,6 +25,7 @@ the full betting layout, a persistent bankroll — with one twist:
 roulette                         # sit down at the table (interactive)
 roulette --bet 10 --on red       # one spin, one bet
 roulette --bet 5 --on 17         # straight up on 17
+roulette --spin                  # just watch the wheel spin, no bets
 roulette --table                 # the layout and every payout
 roulette --stats                 # bankroll, record, recent numbers
 ```
@@ -176,15 +177,15 @@ over with a fresh run: 100 🪙, a new croupier, and a clean beg count. Your
 lifetime stats are kept, including how many times you've been kicked out.
 Begging while you still have chips is just mocked; it doesn't count.
 
-## 🖥️ Command wheel (`--commands` / `--russian`)
+## 🖥️ Command wheel (`--command` / `--russian`)
 
 The original game is still here: a reel of **harmless, read-only shell
 commands** scrolls past a pointer, slows to a stop, and the one it lands on
 runs.
 
 ```bash
-roulette --commands              # spin and run the winning command
-roulette --commands --dry-run    # spin, but don't run anything
+roulette --command               # spin and run the winning command
+roulette --command --dry-run     # spin, but don't run anything
 roulette --list                  # show every command on the wheel
 roulette --russian               # command wheel + the russian slot (below)
 ```
@@ -197,9 +198,9 @@ on **Linux and macOS** — a shared portable set plus platform-specific commands
 You can bet on it too — every command is a colored pocket:
 
 ```bash
-roulette --commands --bet 10 --on red       # even money
-roulette --commands --bet 10 --on green     # land on a "loser" command
-roulette --commands --bet 20 --on jackpot   # land on a marquee pocket
+roulette --command --bet 10 --on red       # even money
+roulette --command --bet 10 --on green     # land on a "loser" command
+roulette --command --bet 20 --on jackpot   # land on a marquee pocket
 ```
 
 The green "loser" commands are the house pockets — but in keeping with the
@@ -234,7 +235,8 @@ Preview the odds without risk: `roulette --russian --dry-run`.
 
 | Option | Description |
 | --- | --- |
-| `--commands` | Spin the wheel of harmless commands instead of the table |
+| `--spin` | Spin the real wheel once, just to watch (no bets, nothing saved) |
+| `--command` | Spin the wheel of harmless commands instead of the table (`--commands` works too) |
 | `--russian` | Command wheel plus the russian roulette slot |
 | `--table` | Show the betting layout and payouts |
 | `--bet CHIPS` | Wager on a single spin |
@@ -265,8 +267,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.4.0/roulette_2.4.0_all.deb
-sudo apt install ./roulette_2.4.0_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.5.0/roulette_2.5.0_all.deb
+sudo apt install ./roulette_2.5.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -277,13 +279,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.4.0_all.deb
-sudo apt install ./dist/roulette_2.4.0_all.deb
+./build-deb.sh                       # produces dist/roulette_2.5.0_all.deb
+sudo apt install ./dist/roulette_2.5.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.4.0_all.deb`).
+`../roulette_2.5.0_all.deb`).
 </details>
 
 ### 2. From source
