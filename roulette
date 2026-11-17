@@ -41,7 +41,7 @@ except ImportError:
 
 IS_WINDOWS = os.name == "nt"
 
-__version__ = "2.5.1"
+__version__ = "2.6.0"
 
 # ---------------------------------------------------------------------------
 # The wheel: harmless, read-only commands, split by platform.

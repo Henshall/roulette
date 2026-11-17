@@ -273,8 +273,8 @@ Download the `.deb` from the
 install it — apt pulls in `python3`/`bash` automatically:
 
 ```bash
-wget https://github.com/Henshall/roulette/releases/download/v2.5.1/roulette_2.5.1_all.deb
-sudo apt install ./roulette_2.5.1_all.deb
+wget https://github.com/Henshall/roulette/releases/download/v2.6.0/roulette_2.6.0_all.deb
+sudo apt install ./roulette_2.6.0_all.deb
 ```
 
 Remove it with `sudo apt remove roulette`.
@@ -285,13 +285,13 @@ Remove it with `sudo apt remove roulette`.
 Only `dpkg-deb` is needed (already on every Debian system):
 
 ```bash
-./build-deb.sh                       # produces dist/roulette_2.5.1_all.deb
-sudo apt install ./dist/roulette_2.5.1_all.deb
+./build-deb.sh                       # produces dist/roulette_2.6.0_all.deb
+sudo apt install ./dist/roulette_2.6.0_all.deb
 ```
 
 Or with the full Debian toolchain:
 `sudo apt-get install -y devscripts debhelper && make deb` (produces
-`../roulette_2.5.1_all.deb`).
+`../roulette_2.6.0_all.deb`).
 </details>
 
 ### 2. Any Linux or macOS (pipx)
