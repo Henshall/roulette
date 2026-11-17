@@ -5,8 +5,8 @@
 class Roulette < Formula
   desc "Zero-edge roulette table for the terminal, with a croupier you can bribe"
   homepage "https://github.com/Henshall/roulette"
-  url "https://github.com/Henshall/roulette/archive/refs/tags/v2.5.0.tar.gz"
-  sha256 "5050a472d1633b9943ff136ababf6ed4b04ec59aad1c43c3130f80a2ceb1e8f0"
+  url "https://github.com/Henshall/roulette/archive/refs/tags/v2.5.1.tar.gz"
+  sha256 "904c03c1ed043236911a5e4619a9e25b41b9f165f5ae6c0e2c9a7da05e4bd728"
   license "MIT"
 
   # A single standard-library Python 3 script. It runs on the python3 that
