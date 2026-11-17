@@ -19,7 +19,9 @@ pipx install roulette-game            # Linux or macOS, with Python 3
 brew install henshall/tap/roulette    # macOS
 ```
 
-Or grab the [`.deb`](#1-debian--ubuntu-package-deb) for Debian and Ubuntu. Then just type `roulette`.
+On **Windows**, download [`roulette.exe`](https://github.com/Henshall/roulette/releases/latest/download/roulette.exe)
+and double-click it. On Debian and Ubuntu you can also grab the
+[`.deb`](#1-debian--ubuntu-package-deb). Then just type `roulette`.
 
 ## Play
 
@@ -258,11 +260,11 @@ Preview the odds without risk: `roulette --russian --dry-run`.
 
 ## Install
 
-Four ways: the prebuilt **`.deb`** (Debian/Ubuntu), **pipx** (any Linux or
-macOS), **Homebrew** (macOS), or **from source**. roulette is a single Python 3 script (3.6 or newer)
+Five ways: the prebuilt **`.deb`** (Debian/Ubuntu), **pipx** (any Linux or
+macOS), **Homebrew** (macOS), **`roulette.exe`** (Windows), or **from source**. roulette is a single Python 3 script (3.6 or newer)
 with no third-party dependencies, just `python3` and `bash`, which ship with
 every Linux distro and with Apple's Command Line Tools on macOS. Every change is
-tested on both Linux and macOS.
+tested on Linux, macOS and Windows.
 
 ### 1. Debian / Ubuntu package (`.deb`)
 
@@ -313,7 +315,24 @@ Upgrade with `brew upgrade roulette`, remove with `brew uninstall roulette`.
 It runs on the `python3` that comes with Apple's Command Line Tools (Homebrew
 already needs those). Without Homebrew, use the from-source install below.
 
-### 4. From source
+### 4. Windows (`roulette.exe`)
+
+Download [**roulette.exe**](https://github.com/Henshall/roulette/releases/latest/download/roulette.exe)
+from the latest release and double-click it. Nothing else to install: Python
+comes bundled inside. It looks best in **Windows Terminal** (the default on
+Windows 11), and your bankroll is saved in `%USERPROFILE%\.roulette`.
+
+The first time, Windows will probably say **"Windows protected your PC"**.
+That's SmartScreen being wary of any app that isn't commercially code-signed;
+click **More info → Run anyway**. Some antivirus tools also flag apps bundled
+with PyInstaller by mistake. If you'd rather not run an `.exe` at all,
+`pip install roulette-game` works on Windows too (with Python from python.org).
+
+The command wheel (`--command`, `--russian`) runs `bash` commands, so it's
+Linux and macOS only; on Windows it's available through
+[WSL](https://learn.microsoft.com/windows/wsl/install).
+
+### 5. From source
 
 Works on **Linux and macOS** (the `.deb` above is Debian/Ubuntu only):
 

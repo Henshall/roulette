@@ -1,0 +1,71 @@
+name: windows
+
+# Tests the game natively on Windows and builds roulette.exe (PyInstaller).
+# On a published release, the .exe is attached to that release.
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # to attach roulette.exe to a release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every mode runs (script)
+        run: |
+          python roulette --version
+          python roulette --spin
+          python roulette --bet 10 --on red --tip 1
+          python roulette --stats
+          python roulette --pray
+          python roulette --table >/dev/null
+          python roulette --beg
+
+      - name: The bash-only modes explain themselves
+        run: |
+          set +e
+          out=$(python roulette --command 2>&1); code=$?
+          echo "$out"
+          [ "$code" = 2 ] && echo "$out" | grep -q "isn't available on Windows"
+
+      - name: Build roulette.exe
+        run: |
+          python -m pip install --quiet pyinstaller pywinpty
+          cp roulette roulette.py
+          pyinstaller --onefile --console --name roulette --noconfirm roulette.py
+          ls -l dist/roulette.exe
+
+      - name: Test roulette.exe
+        run: |
+          dist/roulette.exe --version
+          dist/roulette.exe --spin
+          dist/roulette.exe --bet 5 --on 17
+          dist/roulette.exe --stats
+
+      - name: Interactive table in a Windows pseudo-console
+        shell: pwsh
+        run: python .github/workflows/winpty_smoke.py dist\roulette.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roulette-windows-exe
+          path: dist/roulette.exe
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/roulette.exe --clobber
